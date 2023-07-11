@@ -8,7 +8,8 @@ max_midi: 108
 learning_rate: 1e-5
 epochs: 2500
 download: False
-data_root: './dataset'
+data_root: '/import/c4dm-datasets/diffroll_data/'
+# data_root: './data'
 pin_memory: True
 
 

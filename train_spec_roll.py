@@ -9,7 +9,8 @@ from torch.optim import Adam
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
-from pytorch_lightning.loggers import TensorBoardLogger
+# from pytorch_lightning.loggers import TensorBoardLogger
+import hook
 
 import AudioLoader.music.amt as MusicDataset
 
@@ -49,12 +50,13 @@ def main(cfg):
         name = f"{cfg.model.name}-{cfg.task.sampling.type}-L{cfg.model.args.residual_layers}-C{cfg.model.args.residual_channels}-" + \
                f"beta{cfg.task.beta_end}-{cfg.task.training.mode}-" + \
                f"dilation{cfg.model.args.dilation_base}-{cfg.task.loss_type}-{cfg.dataset.name}"
-    logger = TensorBoardLogger(save_dir=".", version=1, name=name)    
+    # logger = TensorBoardLogger(save_dir=".", version=1, name=name)    
 
     trainer = pl.Trainer(**cfg.trainer,
                          callbacks=[checkpoint_callback,],
-                         logger=logger)
-    
+                        #  logger=logger
+                         )
+    trainer.logger = None
     trainer.fit(model, train_loader, val_loader)
     trainer.test(model, test_loader)
     

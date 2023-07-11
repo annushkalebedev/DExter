@@ -608,8 +608,6 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
             self.uncon_dropout = self.fixed_dropout
         else:
             raise ValueError("unrecognized condition '{condition}'")
-            
-        
         
         # Original dilation for audio was 2**(i % dilation_cycle_length)
         # but we might not need dilation for piano roll
@@ -637,12 +635,13 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
     def forward(self, x_t, waveform, diffusion_step, sampling=False, inpainting_t=None, inpainting_f=None):
         # roll (B, 1, T, F)
         # waveform (B, L)
-        x_t = x_t.squeeze(1).transpose(1,2)
+        x_t = x_t.squeeze(1).transpose(1,2) # (B, 88, 640)
         
         if self.mel_layer != None:
             spec = self.mel_layer(waveform) # (B, n_mels, T)
             spec = torch.log(spec+1e-6)
             spec = self.normalize_spec(spec)
+            
             if self.training: # only use dropout druing training
                 spec = self.uncon_dropout(spec, self.hparams.spec_dropout) # making some spec 0 to be unconditional
                 
@@ -659,31 +658,30 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
                 elif self.hparams.condition == 'trainable_z' or self.hparams.condition == 'fixed':
                     spec = torch.full_like(spec, -1)
 
-            x_t, spectrogram = trim_spec_roll(x_t, spec)
+            x_t, spectrogram = trim_spec_roll(x_t, spec) # spec: (16, 299, 640)
         else:
             spectrogram = None
             
-
-        x = self.input_projection(x_t)
+        x = self.input_projection(x_t) # (16, 512, 640)
         x = F.relu(x)
 
-        diffusion_step = self.diffusion_embedding(diffusion_step)
+        diffusion_step = self.diffusion_embedding(diffusion_step) # (16, 512)
             
         skip = None
         
         index = 0
         for layer in self.residual_layers:
             index += 1
+            # all shapes: (16, 512, 640)
             x, skip_connection = layer(x, diffusion_step, spectrogram)
-            
             
             skip = skip_connection if skip is None else skip_connection + skip
 
-        x = skip / sqrt(len(self.residual_layers))
-        x = self.skip_projection(x)
+        x = skip / sqrt(len(self.residual_layers)) # what does this do??
+        x = self.skip_projection(x) # (16, 512, 640)
         x = F.relu(x)
-        x = self.output_projection(x) #(B, F, T)
-        return x.transpose(1,2).unsqueeze(1), spectrogram #(B, T, F)
+        x = self.output_projection(x) # (16, 88, 640)
+        return x.transpose(1,2).unsqueeze(1), spectrogram # (16, 1, 640, 88)
     
     
     def fixed_dropout(self, x, p, masked_value=-1):

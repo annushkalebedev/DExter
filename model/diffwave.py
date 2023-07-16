@@ -594,7 +594,9 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
                  **kwargs):
         self.spec_dropout = spec_dropout
         super().__init__(**kwargs)
-        self.input_projection = Conv1d(88, residual_channels, 1)
+
+        self.layer_norm = nn.LayerNorm(4)
+        self.input_projection = Conv1d(4, residual_channels, 1)
         self.diffusion_embedding = DiffusionEmbedding(len(self.betas))
         
         if condition == 'trainable_spec':
@@ -624,7 +626,7 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
             ])
             
         self.skip_projection = Conv1d(residual_channels, residual_channels, 1)
-        self.output_projection = Conv1d(residual_channels, 88, 1)
+        self.output_projection = Conv1d(residual_channels, 4, 1)
         nn.init.zeros_(self.output_projection.weight)
         
         self.normalize_spec = Normalization(0, 1, norm_args[2])   
@@ -632,35 +634,23 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
 
         self.mel_layer = torchaudio.transforms.MelSpectrogram(**spec_args)        
 
-    def forward(self, x_t, waveform, diffusion_step, sampling=False, inpainting_t=None, inpainting_f=None):
+    def forward(self, x_t, condition, diffusion_step, sampling=False, inpainting_t=None, inpainting_f=None):
         # roll (B, 1, T, F)
-        # waveform (B, L)
+        # condition (B, ?, ?)
+        
         x_t = x_t.squeeze(1).transpose(1,2) # (B, 88, 640)
         
-        if self.mel_layer != None:
-            spec = self.mel_layer(waveform) # (B, n_mels, T)
-            spec = torch.log(spec+1e-6)
-            spec = self.normalize_spec(spec)
-            
+        if (condition != None):
             if self.training: # only use dropout druing training
-                spec = self.uncon_dropout(spec, self.hparams.spec_dropout) # making some spec 0 to be unconditional
-                
-            if inpainting_t and inpainting_f==None:
-                spec[:,:,int(inpainting_t[0]):int(inpainting_t[1])] = -1
-            elif inpainting_t==None and inpainting_f:
-                spec[:,int(inpainting_f[0]):int(inpainting_f[1]),:] = -1
-            elif inpainting_t and inpainting_f:
-                spec[:,int(inpainting_f[0]):int(inpainting_f[1]),int(inpainting_t[0]):int(inpainting_t[1])] = -1       
-                
+                condition = self.uncon_dropout(condition, self.hparams.spec_dropout) # making some spec 0 to be unconditional
+                           
             if sampling==True:
                 if self.hparams.condition == 'trainable_spec':
-                    spec = self.trainable_parameters
+                    condition = self.trainable_parameters
                 elif self.hparams.condition == 'trainable_z' or self.hparams.condition == 'fixed':
-                    spec = torch.full_like(spec, -1)
+                    condition = torch.full_like(condition, -1)
 
-            x_t, spectrogram = trim_spec_roll(x_t, spec) # spec: (16, 299, 640)
-        else:
-            spectrogram = None
+            x_t, condition = trim_spec_roll(x_t, condition) # spec: (16, 299, 640)
             
         x = self.input_projection(x_t) # (16, 512, 640)
         x = F.relu(x)
@@ -668,12 +658,11 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
         diffusion_step = self.diffusion_embedding(diffusion_step) # (16, 512)
             
         skip = None
-        
         index = 0
         for layer in self.residual_layers:
             index += 1
             # all shapes: (16, 512, 640)
-            x, skip_connection = layer(x, diffusion_step, spectrogram)
+            x, skip_connection = layer(x, diffusion_step, condition)
             
             skip = skip_connection if skip is None else skip_connection + skip
 
@@ -681,7 +670,7 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
         x = self.skip_projection(x) # (16, 512, 640)
         x = F.relu(x)
         x = self.output_projection(x) # (16, 88, 640)
-        return x.transpose(1,2).unsqueeze(1), spectrogram # (16, 1, 640, 88)
+        return x.transpose(1,2).unsqueeze(1), condition # (16, 1, 640, 88)
     
     
     def fixed_dropout(self, x, p, masked_value=-1):

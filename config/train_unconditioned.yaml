@@ -8,21 +8,24 @@ max_midi: 108
 learning_rate: 1e-5
 epochs: 2500
 download: False
-data_root: '/import/c4dm-datasets/diffroll_data/'
-# data_root: './data'
+load_trained: False
+test_only: False
+# data_root: '/import/c4dm-datasets/diffroll_data/'
+pretrained_path: 'output/339e-diffusion_loss0.07.ckpt'
+data_root: './data'
 pin_memory: True
 
 
 dataloader:
     train:
-        batch_size: 16
+        batch_size: 4
         num_workers: 40
         shuffle: True
         pin_memory: ${pin_memory}
         prefetch_factor: 2
         persistent_workers: True
     val:
-        batch_size: 16
+        batch_size: 4
         num_workers: 4
         shuffle: False
         pin_memory: ${pin_memory}
@@ -39,6 +42,7 @@ trainer:
     check_val_every_n_epoch: ${val_freq}
     
 modelcheckpoint:
+    dirpath: 'output'
     monitor: 'Val/diffusion_loss'
     filename: '{epoch:02d}e-diffusion_loss{Train/diffusion_loss:.2f}'
     save_top_k: 2
@@ -53,3 +57,9 @@ defaults:
     - model: ClassifierFreeDiffRoll
     - task: classifierfree_diffusion
     - dataset: MAESTRO
+
+
+hydra:  
+  output_subdir: null  
+  run:  
+    dir: .

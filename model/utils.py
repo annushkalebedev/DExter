@@ -19,7 +19,6 @@ class Normalization():
                 return x_scaled
         elif mode == 'imagewise':
             def normalize(x):
-                size = x.shape
                 # x_max = x.view(size[0], size[1]*size[2]).max(1, keepdim=True)[0]
                 # x_min = x.view(size[0], size[1]*size[2]).min(1, keepdim=True)[0]
                 x_max = x.flatten(1).max(1, keepdim=True)[0]

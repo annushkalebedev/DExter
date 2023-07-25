@@ -14,7 +14,7 @@ HOP_LENGTH = 160
 SAMPLE_RATE = 16000
 
 import partitura as pt
-from utils import animate_sampling, render_sample
+from utils import animate_sampling, render_sample, Normalization
 
 # from model.utils import Normalization
 def linear_beta_schedule(beta_start, beta_end, timesteps):
@@ -203,7 +203,7 @@ class RollDiffusion(pl.LightningModule):
         return [optimizer]
 
 
-class SpecRollDiffusion(pl.LightningModule):
+class PCodecDiffusion(pl.LightningModule):
     def __init__(self,
                  lr,
                  timesteps,
@@ -220,9 +220,9 @@ class SpecRollDiffusion(pl.LightningModule):
         super().__init__()
         
         self.save_hyperparameters()
-        
-        self.input_norm = nn.LayerNorm(4)
 
+        self.input_normalize = Normalization(0, 1, 'imagewise')
+        
         # define beta schedule (beta is variance)
         self.betas = linear_beta_schedule(beta_start, beta_end, timesteps=timesteps)
 
@@ -265,9 +265,9 @@ class SpecRollDiffusion(pl.LightningModule):
         
         if batch_idx == 0:
             # show sampling loss during validation
-            noise_list = self.sampling(batch)
-            pcodec_pred = noise_list[-1] # (B, 1, T, F)        
-            pcodec_label = batch.unsqueeze(1).cpu()
+            noise_list = self.sampling(batch, batch_idx)
+            pcodec_pred, _ = noise_list[-1] # (B, 1, T, F)        
+            pcodec_label = batch['p_codec'].unsqueeze(1).cpu()
             sampled_loss = self.p_losses(pcodec_label, torch.tensor(pcodec_pred), loss_type='l2')
             self.log(f"Val/sampled_loss", sampled_loss) 
 
@@ -281,50 +281,47 @@ class SpecRollDiffusion(pl.LightningModule):
 
 
     def test_step(self, batch, batch_idx, save_animation=False):
-        noise_list, spec = self.sampling(batch, batch_idx)
+        noise_list = self.sampling(batch, batch_idx)
         
         # noise_list: [(pred_t, t), ..., (pred_0, 0)]
-        pcodec_pred = noise_list[-1] # (B, 1, T, F)        
-        pcodec_label = batch.unsqueeze(1).cpu()
+        pcodec_pred, _ = noise_list[-1] # (B, 1, T, F)        
+        pcodec_label = batch['p_codec'].unsqueeze(1).cpu()
         
-        if batch_idx==0:                
-            for noise_npy, t_index in noise_list: # stepwise plot of the predicted codec
-                if (t_index+1) % 10==0: 
-                    fig, ax = plt.subplots(2,2, figsize=(48, 8))
-                    for idx, j in enumerate(noise_npy):
-                        # j (1, T, F)
-                        ax.flatten()[idx].imshow(j[0].T, aspect='auto', origin='lower')
-                        self.logger.log_image(key=f"Test/pred",images=[fig], step=self.hparams.timesteps-t_index)
-                        plt.close()           
+        if batch_idx==0:  # plot the comparison between prediction and label  
+            for idx, (pred, label) in enumerate(zip(pcodec_pred[:4], pcodec_label[:4])):
+                fig, ax = plt.subplots(2,4, figsize=(48, 8))
+                ax.flatten()[idx].imshow(pred[0].T, aspect='auto', origin='lower')
+                ax.flatten()[idx+4].imshow(label[0].T, aspect='auto', origin='lower')
+                self.logger.log_image(key=f"Test/pred", images=[fig])
+                
 
-            # save the prediction samples (of one batch) and render. Save to samples/sample_id.mid
-            np.save('samples/test_sample.npy', pcodec_pred)
+        # save the prediction samples (of one batch) and render. 
+        np.save('samples/test_sample.npy', pcodec_pred)
 
-            score = pt.load_musicxml("../Datasets/vienna4x22/musicxml/Schubert_D783_no15.musicxml")
-            performed_part = render_sample(score, 'samples/test_sample.npy', "data/snote_id.npy", "samples/label")
+        performed_part = render_sample(pcodec_pred, batch, "samples/sample")
 
+        if save_animation:
+            t_list = torch.arange(1, self.hparams.timesteps, 5).flip(0)
+            if t_list[-1] != self.hparams.timesteps:
+                t_list = torch.cat((t_list, torch.tensor([self.hparams.timesteps])), 0)
+            fig, axes = plt.subplots(2,4, figsize=(16, 5))
 
-            if save_animation:
-                t_list = torch.arange(1, self.hparams.timesteps, 5).flip(0)
-                if t_list[-1] != self.hparams.timesteps:
-                    t_list = torch.cat((t_list, torch.tensor([self.hparams.timesteps])), 0)
-                fig, axes = plt.subplots(2,4, figsize=(16, 5))
+            ax_flat = axes.flatten()
+            caxs = []
+            for ax in axes.flatten():
+                div = make_axes_locatable(ax)
+                caxs.append(div.append_axes('right', '5%', '5%'))
 
-                ax_flat = axes.flatten()
-                caxs = []
-                for ax in axes.flatten():
-                    div = make_axes_locatable(ax)
-                    caxs.append(div.append_axes('right', '5%', '5%'))
-
-                ani = animation.FuncAnimation(fig,
-                                            animate_sampling,
-                                            frames=tqdm(t_list, desc='Animating'),
-                                            fargs=(fig, ax_flat, caxs, noise_list, self.hparams.timesteps),                                          
-                                            interval=500,                                          
-                                            blit=False,
-                                            repeat_delay=1000)
-                ani.save('samples/.gif', dpi=80, writer='imagemagick')
-              
+            ani = animation.FuncAnimation(fig,
+                                        animate_sampling,
+                                        frames=tqdm(t_list, desc='Animating'),
+                                        fargs=(fig, ax_flat, caxs, noise_list, self.hparams.timesteps),                                          
+                                        interval=500,                                          
+                                        blit=False,
+                                        repeat_delay=1000)
+            ani.save('samples/.gif', dpi=80, writer='imagemagick')
+            
+        hook()
         sampled_loss = self.p_losses(pcodec_label, torch.tensor(pcodec_pred), loss_type='l2')
         frame_p, frame_r, frame_f1, _ = precision_recall_fscore_support(pcodec_label.flatten(),
                                                                         pcodec_pred.flatten() > self.hparams.frame_threshold,
@@ -333,7 +330,6 @@ class SpecRollDiffusion(pl.LightningModule):
         self.log(f"Test/sampled_loss", sampled_loss)
         self.log(f"Test/frame_f1", frame_f1) 
 
-        
         
     # def test_step(self, batch, batch_idx):
     #     """This is for directly predicting x0"""
@@ -533,13 +529,12 @@ class SpecRollDiffusion(pl.LightningModule):
         plt.close()
         
     def step(self, batch):
-        # batch: (B, L, 4)
-        batch_size = batch.shape[0]
-        pcodec = batch.unsqueeze(1) 
-        device = pcodec.device
-        
-        # normalize pcodec
-        pcodec = self.input_norm(pcodec)
+        p_codec, s_codec = batch['p_codec'], batch['s_codec']
+        batch_size = p_codec.shape[0]
+        device = p_codec.device
+
+        p_codec = self.input_normalize(p_codec)
+        p_codec = p_codec.unsqueeze(1)  # (B, 1, T, F)
 
         # Algorithm 1 line 3: sample t uniformally for every example in the batch
         ## sampling the same t within each batch, might not work well
@@ -548,10 +543,10 @@ class SpecRollDiffusion(pl.LightningModule):
         
         t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long() # more diverse sampling
         
-        noise = torch.randn_like(pcodec) # creating label noise
+        noise = torch.randn_like(p_codec) # creating label noise
         
         x_t = q_sample( # sampling noise at time t
-            x_start=pcodec,
+            x_start=p_codec,
             t=t,
             sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
             sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
@@ -572,10 +567,10 @@ class SpecRollDiffusion(pl.LightningModule):
                 sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
                 sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod)
             
-        # train to predict the roll 
+        # train to predict p_codec
         elif self.hparams.training.mode == 'x_0':
-            pred_pcodec, spec = self(x_t, None, t) # train to predict the roll
-            diffusion_loss = self.p_losses(pcodec, pred_pcodec, loss_type=self.hparams.loss_type)
+            pred_p_codec, _ = self(x_t, s_codec, t) 
+            diffusion_loss = self.p_losses(p_codec, pred_p_codec, loss_type=self.hparams.loss_type)
             
         elif self.hparams.training.mode == 'ex_0':
             epsilon_pred, spec = self(x_t, waveform, t) # predict the noise N(0, 1)
@@ -591,32 +586,30 @@ class SpecRollDiffusion(pl.LightningModule):
             raise ValueError(f"training mode {self.training.mode} is not supported. Please either use 'x_0' or 'epsilon'.")
                    
         tensors = {
-            "pred_pcodec": pred_pcodec,
-            "label_pcodec": pcodec
+            "pred_pcodec": pred_p_codec,
+            "label_pcodec": p_codec
         }
         losses = {
             "diffusion_loss": diffusion_loss,
-            # "amt_loss": amt_loss
         }                   
         
         return losses, tensors
     
     def sampling(self, batch, batch_idx):
-        # batch: (B, L, 4)
-        pcodec = batch.unsqueeze(1) 
-        device = pcodec.device
+        p_codec = batch['p_codec'].unsqueeze(1) 
+        s_codec = batch['s_codec']
 
         # Algorithm 1 line 3: sample t uniformally for every example in the batch
         
         self.inner_loop.refresh()
         self.inner_loop.reset()
         
-        noise = torch.randn_like(pcodec)
+        noise = torch.randn_like(p_codec)
         noise_list = []
         noise_list.append((noise, self.hparams.timesteps))
 
         for t_index in reversed(range(0, self.hparams.timesteps)):
-            noise, spec = self.reverse_diffusion(noise, None, t_index) # cfdg_ddpm_x0
+            noise, _ = self.reverse_diffusion(noise, s_codec, t_index) # cfdg_ddpm_x0
             noise_npy = noise.detach().cpu().numpy()
                     # self.hparams.timesteps-i is used because slide bar won't show
                     # if global step starts from self.hparams.timesteps
@@ -800,9 +793,9 @@ class SpecRollDiffusion(pl.LightningModule):
             sigma = (self.sqrt_one_minus_alphas_cumprod[t_index - 1] / self.sqrt_one_minus_alphas_cumprod[t_index]) * (
                 torch.sqrt(1 - self.alphas[t_index]))           
             model_mean = (self.sqrt_alphas_cumprod[t_index - 1]) * x0_pred + (
-                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index - 1] ** 2 - sigma ** 2) * (
-                    x - self.sqrt_alphas_cumprod[t_index] * x0_pred) / self.sqrt_one_minus_alphas_cumprod[t_index]) + (  # epsilon
-                sigma * torch.randn_like(x))
+                            torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index - 1] ** 2 - sigma ** 2) * (
+                            x - self.sqrt_alphas_cumprod[t_index] * x0_pred) / self.sqrt_one_minus_alphas_cumprod[t_index]) + (  # epsilon
+                            sigma * torch.randn_like(x))
 
         return model_mean, spec
     

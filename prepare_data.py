@@ -73,7 +73,7 @@ def process_dataset_codec(dataset='ASAP'):
 
     if dataset == "VIENNA422":
         performance_paths = glob.glob(os.path.join(VIENNA_PERFORMANCE_DIR, "*[!e].mid"))
-        performance_paths = [pp for pp in performance_paths if "Schubert" in pp] # try only schubert data in the beginning
+        # performance_paths = [pp for pp in performance_paths if "Schubert" in pp] # try only schubert data in the beginning
         alignment_paths = [(VIENNA_MATCH_DIR + pp.split("/")[-1][:-4] + ".match") for pp in performance_paths]
         score_paths = [(VIENNA_MUSICXML_DIR + pp.split("/")[-1][:-8] + ".musicxml") for pp in performance_paths]
         performance_paths = [None] * len(alignment_paths) # don't use the given performance, use the aligned.
@@ -118,15 +118,28 @@ def process_dataset_codec(dataset='ASAP'):
         if (os.path.exists(s_path) and os.path.exists(a_path)):
 
             if prev_s_path == s_path:
-                p_codec, score = get_performance_codec(s_path, a_path, p_path, score=score)
+                p_codec, score, save_snote_id_path = get_performance_codec(s_path, a_path, p_path, score=score)
             else:
-                p_codec, score = get_performance_codec(s_path, a_path, p_path)
+                p_codec, score, save_snote_id_path = get_performance_codec(s_path, a_path, p_path)
 
-            # pad_data = np.pad(rfn.structured_to_unstructured(p_codec), ((0, 156-len(p_codec)), (0, 0)), 'constant')
-            # assert(pad_data.shape == (156, 4))
-            data.append(rfn.structured_to_unstructured(p_codec))
+            p_codec = rfn.structured_to_unstructured(p_codec)
+            s_codec = rfn.structured_to_unstructured(
+                score.note_array()[['onset_div', 'duration_div', 'pitch', 'voice']])
+            
+            p_codec = np.pad(p_codec, ((0, 1000-len(p_codec)), (0, 0)), mode='constant', constant_values=0)
+            s_codec = np.pad(s_codec, ((0, 1000-len(s_codec)), (0, 0)), mode='constant', constant_values=0)
+            assert (p_codec.shape == s_codec.shape)
 
-            if np.isnan(rfn.structured_to_unstructured(p_codec)).any():
+            if dataset == "VIENNA422":
+                piece_name = s_path.split("/")[-1].split(".")[0]
+            data.append({"p_codec": p_codec, 
+                         "s_codec": s_codec,
+                         "snote_id_path": save_snote_id_path,
+                         "score_path": s_path,
+                         "piece_name": piece_name  # piece name for shortcut and identifying the generated sample
+                         })
+
+            if np.isnan(p_codec).any():
                 hook()
             prev_s_path = s_path
         else:
@@ -134,7 +147,7 @@ def process_dataset_codec(dataset='ASAP'):
 
 
     # print(max([data[i].shape[0] for i in range(22)]))
-    np.save("data/p_codec.npy", np.stack(data))
+    np.save("data/vienna422_codec.npy", np.stack(data))
     return 
 
 
@@ -157,9 +170,14 @@ def get_performance_codec(score_path, alignment_path, performance_path=None, sco
 
     # get the performance encodings
     parameters, snote_ids, pad_mask = pt.musicanalysis.encode_performance(score, performance, alignment)
-    hook()
     
-    return parameters, score
+    # save snote_id if it doesn't exist already
+    save_snote_id_path = score_path.split("/")[-1].split(".")[0]
+    save_snote_id_path = f"data/snote_ids/vienna422_{save_snote_id_path}.npy"
+    if not os.path.exists(save_snote_id_path):
+        np.save(save_snote_id_path, snote_ids)
+
+    return parameters, score, save_snote_id_path
 
 
 def render_sample(score_part, sample_path, snote_ids_path):

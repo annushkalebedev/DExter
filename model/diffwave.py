@@ -17,7 +17,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from task.diffusion import SpecRollDiffusion
+from task.diffusion import PCodecDiffusion
 from task.baseline import SpecRollBaseline
 import torchaudio
 from model.utils import Normalization
@@ -26,17 +26,6 @@ from math import sqrt
 
 Linear = nn.Linear
 ConvTranspose2d = nn.ConvTranspose2d
-
-def trim_spec_roll(roll, spectrogram):
-    T_roll = roll.shape[-1]
-    T_spec = spectrogram.shape[-1]
-    
-    # trimming extra time steps
-    T_min = min(T_roll, T_spec)
-    roll = roll[..., :T_min]
-    spectrogram = spectrogram[..., :T_min]    
-
-    return roll, spectrogram
 
 def Conv1d(*args, **kwargs):
     layer = nn.Conv1d(*args, **kwargs)
@@ -106,16 +95,16 @@ class SpectrogramUpsampler(nn.Module):
 
 class ResidualBlock(nn.Module):
     def __init__(self,
-                 n_mels,
+                 n_notes,
                  residual_channels,
                  dilation,
                  kernel_size=3,
                  uncond=False):
         '''
-        :param n_mels: inplanes of conv1x1 for spectrogram conditional
+        :param n_notes: inplanes of conv1x1 for s_codec conditional
         :param residual_channels: audio conv
         :param dilation: audio conv dilation
-        :param uncond: disable spectrogram conditional
+        :param uncond: disable s_codec conditional
         '''
         super().__init__()
         self.dilated_conv = Conv1d(residual_channels,
@@ -125,7 +114,7 @@ class ResidualBlock(nn.Module):
                                    dilation=dilation)
         self.diffusion_projection = Linear(512, residual_channels)
         if not uncond: # conditional model
-            self.conditioner_projection = Conv1d(n_mels, 2 * residual_channels, 1)
+            self.conditioner_projection = Conv1d(4, 2 * residual_channels, 1)
         else: # unconditional model
             self.conditioner_projection = None
 
@@ -151,18 +140,18 @@ class ResidualBlock(nn.Module):
         return (x + residual) / sqrt(2.0), skip
     
 class ResidualBlockz(nn.Module):
-    def __init__(self, n_mels, residual_channels, dilation, uncond=False):
+    def __init__(self, n_notes, residual_channels, dilation, uncond=False):
         '''
-        :param n_mels: inplanes of conv1x1 for spectrogram conditional
+        :param n_notes: inplanes of conv1x1 for s_codec conditional
         :param residual_channels: audio conv
         :param dilation: audio conv dilation
-        :param uncond: disable spectrogram conditional
+        :param uncond: disable s_codec conditional
         '''
         super().__init__()
         self.dilated_conv = Conv1d(residual_channels, 2 * residual_channels, 3, padding=dilation, dilation=dilation)
         self.diffusion_projection = Linear(512, residual_channels)
         if not uncond: # conditional model
-            self.conditioner_projection = Conv1d(n_mels, 2 * residual_channels, 1)
+            self.conditioner_projection = Conv1d(4, 2 * residual_channels, 1)
             uncon_z = torch.empty(2 * residual_channels, 640)
             uncon_z = nn.Parameter(uncon_z, requires_grad=True)
             self.register_parameter("uncon_z", uncon_z)          
@@ -280,7 +269,7 @@ class DiffWave(nn.Module):
         return x
 
     
-class DiffRoll(SpecRollDiffusion):
+class DiffRoll(PCodecDiffusion):
     def __init__(self,
                  residual_channels,
                  unconditional,
@@ -344,7 +333,7 @@ class DiffRoll(SpecRollDiffusion):
         x = self.output_projection(x) #(B, F, T)
         return x.transpose(1,2).unsqueeze(1), spectrogram #(B, T, F)
 
-class DiffRollv2(SpecRollDiffusion):
+class DiffRollv2(PCodecDiffusion):
     def __init__(self,
                  residual_channels,
                  unconditional,
@@ -410,7 +399,7 @@ class DiffRollv2(SpecRollDiffusion):
     
     
     
-class DiffRollv2Debug(SpecRollDiffusion):
+class DiffRollv2Debug(PCodecDiffusion):
     def __init__(self,
                  residual_channels,
                  unconditional,
@@ -463,7 +452,7 @@ class DiffRollv2Debug(SpecRollDiffusion):
         
         return x.transpose(-2,-1), roll #(B, T, F)
 
-class DiffRollDebug(SpecRollDiffusion):
+class DiffRollDebug(PCodecDiffusion):
     def __init__(self,
                  residual_channels,
                  unconditional,
@@ -576,12 +565,13 @@ class DiffRollBaseline(SpecRollBaseline):
         return x.transpose(1,2).unsqueeze(1), spectrogram #(B, T, F)
     
     
-class ClassifierFreeDiffRoll(SpecRollDiffusion):
+class ClassifierFreeDiffPerformer(PCodecDiffusion):
     def __init__(self,
                  residual_channels,
                  unconditional,
                  condition,
-                 n_mels,
+                 n_notes,
+                #  n_mels,
                  norm_args,
                  residual_layers = 30,
                  kernel_size = 3,
@@ -595,12 +585,13 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
         self.spec_dropout = spec_dropout
         super().__init__(**kwargs)
 
-        self.layer_norm = nn.LayerNorm(4)
+        self.condition_normalize = Normalization(norm_args[0], norm_args[1], norm_args[2])
+
         self.input_projection = Conv1d(4, residual_channels, 1)
         self.diffusion_embedding = DiffusionEmbedding(len(self.betas))
         
-        if condition == 'trainable_spec':
-            trainable_parameters = torch.full((spec_args.n_mels,641), -1).float() # TODO: makes it automatic later
+        if condition == 'trainable_score':
+            trainable_parameters = torch.full((spec_args.n_notes,641), -1).float() # TODO: makes it automatic later
             
             trainable_parameters = nn.Parameter(trainable_parameters, requires_grad=True)
             self.register_parameter("trainable_parameters", trainable_parameters)
@@ -612,16 +603,17 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
             raise ValueError("unrecognized condition '{condition}'")
         
         # Original dilation for audio was 2**(i % dilation_cycle_length)
-        # but we might not need dilation for piano roll
+        # but we might not need dilation for piano roll 
+        # TODO: check this for your data
         if condition == 'trainable_z':
             print(f"================trainable_z layers=================")
             self.residual_layers = nn.ModuleList([
-                ResidualBlockz(n_mels, residual_channels, dilation_base**(i % dilation_bound), kernel_size, uncond=unconditional)
+                ResidualBlockz(n_notes, residual_channels, dilation_base**(i % dilation_bound), kernel_size, uncond=unconditional)
                 for i in range(residual_layers)
             ])            
         else:
             self.residual_layers = nn.ModuleList([
-                ResidualBlock(n_mels, residual_channels, dilation_base**(i % dilation_bound), kernel_size, uncond=unconditional)
+                ResidualBlock(n_notes, residual_channels, dilation_base**(i % dilation_bound), kernel_size, uncond=unconditional)
                 for i in range(residual_layers)
             ])
             
@@ -629,30 +621,28 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
         self.output_projection = Conv1d(residual_channels, 4, 1)
         nn.init.zeros_(self.output_projection.weight)
         
-        self.normalize_spec = Normalization(0, 1, norm_args[2])   
-        self.normalize = Normalization(norm_args[0], norm_args[1], norm_args[2])        
-
         self.mel_layer = torchaudio.transforms.MelSpectrogram(**spec_args)        
 
     def forward(self, x_t, condition, diffusion_step, sampling=False, inpainting_t=None, inpainting_f=None):
-        # roll (B, 1, T, F)
-        # condition (B, ?, ?)
+        # x_t : (B, 1, T, F)
+        # condition : (B, T, F)
         
-        x_t = x_t.squeeze(1).transpose(1,2) # (B, 88, 640)
+        x_t = x_t.squeeze(1).transpose(1, 2) # (B, 4, 1000)
         
         if (condition != None):
+            condition = condition.transpose(1, 2)
+            condition = condition.float()
+            condition = self.condition_normalize(condition)
             if self.training: # only use dropout druing training
-                condition = self.uncon_dropout(condition, self.hparams.spec_dropout) # making some spec 0 to be unconditional
+                condition = self.uncon_dropout(condition, self.hparams.spec_dropout) # making some score 0 to be unconditional
                            
             if sampling==True:
-                if self.hparams.condition == 'trainable_spec':
+                if self.hparams.condition == 'trainable_score':
                     condition = self.trainable_parameters
                 elif self.hparams.condition == 'trainable_z' or self.hparams.condition == 'fixed':
                     condition = torch.full_like(condition, -1)
-
-            x_t, condition = trim_spec_roll(x_t, condition) # spec: (16, 299, 640)
             
-        x = self.input_projection(x_t) # (16, 512, 640)
+        x = self.input_projection(x_t) # (8, 512, 1000)
         x = F.relu(x)
 
         diffusion_step = self.diffusion_embedding(diffusion_step) # (16, 512)
@@ -661,16 +651,16 @@ class ClassifierFreeDiffRoll(SpecRollDiffusion):
         index = 0
         for layer in self.residual_layers:
             index += 1
-            # all shapes: (16, 512, 640)
+            # all shapes: (8, 512, 1000)
             x, skip_connection = layer(x, diffusion_step, condition)
             
             skip = skip_connection if skip is None else skip_connection + skip
 
         x = skip / sqrt(len(self.residual_layers)) # what does this do??
-        x = self.skip_projection(x) # (16, 512, 640)
+        x = self.skip_projection(x) # (8, 512, 1000)
         x = F.relu(x)
-        x = self.output_projection(x) # (16, 88, 640)
-        return x.transpose(1,2).unsqueeze(1), condition # (16, 1, 640, 88)
+        x = self.output_projection(x) # (8, 4, 1000)
+        return x.transpose(1,2).unsqueeze(1), condition # (8, 1, 1000, 4)
     
     
     def fixed_dropout(self, x, p, masked_value=-1):

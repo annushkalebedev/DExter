@@ -1,6 +1,6 @@
 task:
   lr: ${learning_rate}
-  timesteps: 200
+  timesteps: 400
   loss_type: 'l2'
   loss_keys:
       - 'diffusion_loss'

@@ -1,6 +1,7 @@
 task:
+  samples_root: 'artifacts/samples'
   lr: ${learning_rate}
-  timesteps: 400
+  timesteps: 50
   loss_type: 'l2'
   loss_keys:
       - 'diffusion_loss'

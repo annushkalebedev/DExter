@@ -581,6 +581,7 @@ class ClassifierFreeDiffPerformer(PCodecDiffusion):
                  spec_dropout = 0.5,
                  inpainting_t = None,
                  inpainting_f = None,
+                 samples_root = "artifacts/samples",
                  **kwargs):
         self.spec_dropout = spec_dropout
         super().__init__(**kwargs)

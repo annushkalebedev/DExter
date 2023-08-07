@@ -9,9 +9,9 @@ weights
 wandb/*
 *.gif
 snote_id.npy
-samples/*
-output/*
 DiffPerformer/*
 *.log
 tmp*
 hook.py
+data/*
+artifacts/*

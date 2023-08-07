@@ -5,6 +5,9 @@ from pathlib import Path
 sys.path.insert(0, "../partitura")
 sys.path.insert(0, "../")
 import partitura as pt
+from scipy.interpolate import interp1d
+import numpy.lib.recfunctions as rfn
+import matplotlib.pyplot as plt
 import numpy as np
 import hook
 
@@ -17,26 +20,80 @@ def render_sample(sampled_parameters, batch, save_path):
             "score_path" : score_path to load
             "snote_id_path" : snote_id path to load
         snote_ids (str or list) : list of snote_id or path to load
-        
     """
+    B = len(sampled_parameters) # batch_size
+    os.makedirs(save_path, exist_ok=True)
 
-    for idx in range(len(sampled_parameters)): # batch iteration
-        parameters = sampled_parameters[idx]
-        parameters = list(zip(*parameters.T))
-        performance_array = np.array(parameters, 
-                            dtype=[("beat_period", "f4"), ("velocity", "f4"), ("timing", "f4"), ("articulation_log", "f4")])
-        
+    fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 24))
+    for idx in range(B): 
+        performance_array = parameters_to_performance_array(sampled_parameters[idx])
+
         snote_ids = np.load(batch['snote_id_path'][idx])
-        score = pt.load_musicxml(batch['score_path'][idx])
-        piece_name = batch['piece_name']
+        score = pt.load_musicxml(batch['score_path'][idx], force_note_ids='keep')
+        # unfold the score if necessary (mostly for ASAP)
+        if ("-" in snote_ids[0] and 
+            "-" not in score.note_array()['id'][0]):
+            score = pt.score.unfold_part_maximal(pt.score.merge_parts(score.parts)) 
+        piece_name = batch['piece_name'][idx]
         N = len(snote_ids)
         
         pad_mask = np.full(snote_ids.shape, False)
         performed_part = pt.musicanalysis.decode_performance(score, performance_array[:N], snote_ids=snote_ids, pad_mask=pad_mask)
 
-        pt.save_performance_midi(performed_part, f"{save_path}_{idx}_{piece_name}.mid")
+        # compute the tempo curve of sampled parameters (avg for joint-onsets)
+        beats, (performed_tempo, label_tempo), (performed_vel, label_vel) = compare_performance_curve(
+                                                score, snote_ids, performance_array,
+                                                parameters_to_performance_array(batch['p_codec'][idx].cpu()))
+        
+        ax.flatten()[idx].plot(beats, performed_tempo, label="performed_tempo")
+        ax.flatten()[idx].plot(beats, label_tempo, label="label_tempo")
+        ax.flatten()[idx].set_ylim(0, 500)
 
-    return performed_part 
+        ax.flatten()[idx+B].plot(beats, performed_vel, label="performed_vel")
+        ax.flatten()[idx+B].plot(beats, label_vel, label="label_vel")
+
+        pt.save_performance_midi(performed_part, f"{save_path}/{idx}_{piece_name}.mid")
+
+    return performed_part, fig
+
+
+def compare_performance_curve(score, snote_ids, pcodec_pred, pcodec_label, visualize=False):
+    """compute the performance curve (tempo curve \ velocity curve) from given performance array
+
+    Returns:
+        onset_beats : 
+        (performed_tempo, label_tempo): 
+        (performed_vel, label_vel): 
+    """
+    na = score.note_array()
+    na = na[np.in1d(na['id'], snote_ids)]
+
+    joint_pcodec_pred = rfn.merge_arrays([na, pcodec_pred[:len(na)]], flatten = True, usemask = False)
+    onset_beats = np.unique(na['onset_beat'])
+    performed_bp = [joint_pcodec_pred[joint_pcodec_pred['onset_beat'] == ob]['beat_period'].mean() for ob in onset_beats]
+    performed_vel = [joint_pcodec_pred[joint_pcodec_pred['onset_beat'] == ob]['velocity'].mean() for ob in onset_beats]
+    tempo_curve_pred = interp1d(onset_beats, 60 / np.array(performed_bp))
+
+    joint_pcodec_label = rfn.merge_arrays([na, pcodec_label[:len(na)]], flatten = True, usemask = False)
+    onset_beats = np.unique(na['onset_beat'])
+    label_bp = [joint_pcodec_label[joint_pcodec_label['onset_beat'] == ob]['beat_period'].mean() for ob in onset_beats]
+    label_vel = [joint_pcodec_label[joint_pcodec_label['onset_beat'] == ob]['velocity'].mean() for ob in onset_beats]
+    tempo_curve_label = interp1d(onset_beats, 60 / np.array(label_bp))
+
+    return onset_beats, (60 / np.array(performed_bp), 60 / np.array(label_bp)), (np.array(performed_vel), np.array(label_vel))
+
+
+
+def parameters_to_performance_array(parameters):
+    """
+        parameters (np.ndarray) : shape (1000, 4)
+    """
+    parameters = list(zip(*parameters.T))
+    performance_array = np.array(parameters, 
+                        dtype=[("beat_period", "f4"), ("velocity", "f4"), ("timing", "f4"), ("articulation_log", "f4")])
+
+    return performance_array
+
 
 
 def animate_sampling(t_idx, fig, ax_flat, caxs, noise_list, total_timesteps):
@@ -102,7 +159,6 @@ class Normalization():
 
 if __name__ == "__main__":
 
-    score = pt.load_musicxml("../Datasets/vienna4x22/musicxml/Schubert_D783_no15.musicxml")
     performed_part = render_sample(score, 'samples/test_sample.npy', "data/snote_id.npy", "samples/label")
 
     pass

@@ -265,11 +265,11 @@ class PCodecDiffusion(pl.LightningModule):
         
         if batch_idx == 0:
             # show sampling loss during validation
-            noise_list = self.sampling(batch, batch_idx)
-            pcodec_pred, _ = noise_list[-1] # (B, 1, T, F)        
-            pcodec_label = batch['p_codec'].unsqueeze(1).cpu()
-            sampled_loss = self.p_losses(pcodec_label, torch.tensor(pcodec_pred), loss_type='l2')
-            self.log(f"Val/sampled_loss", sampled_loss) 
+            # noise_list = self.sampling(batch, batch_idx)
+            # pcodec_pred, _ = noise_list[-1] # (B, 1, T, F)        
+            # pcodec_label = batch['p_codec'].unsqueeze(1).cpu()
+            # sampled_loss = self.p_losses(pcodec_label, torch.tensor(pcodec_pred), loss_type='l2')
+            # self.log(f"Val/sampled_loss", sampled_loss) 
 
             if hasattr(self.hparams, 'condition'): # the condition for classifier free
                 if self.hparams.condition == 'trainable_spec':
@@ -286,19 +286,6 @@ class PCodecDiffusion(pl.LightningModule):
         # noise_list: [(pred_t, t), ..., (pred_0, 0)]
         pcodec_pred, _ = noise_list[-1] # (B, 1, T, F)        
         pcodec_label = batch['p_codec'].unsqueeze(1).cpu()
-        
-        if batch_idx==0:  # plot the comparison between prediction and label  
-            for idx, (pred, label) in enumerate(zip(pcodec_pred[:4], pcodec_label[:4])):
-                fig, ax = plt.subplots(2,4, figsize=(48, 8))
-                ax.flatten()[idx].imshow(pred[0].T, aspect='auto', origin='lower')
-                ax.flatten()[idx+4].imshow(label[0].T, aspect='auto', origin='lower')
-                self.logger.log_image(key=f"Test/pred", images=[fig])
-                
-
-        # save the prediction samples (of one batch) and render. 
-        np.save('samples/test_sample.npy', pcodec_pred)
-
-        performed_part = render_sample(pcodec_pred, batch, "samples/sample")
 
         if save_animation:
             t_list = torch.arange(1, self.hparams.timesteps, 5).flip(0)
@@ -320,15 +307,28 @@ class PCodecDiffusion(pl.LightningModule):
                                         blit=False,
                                         repeat_delay=1000)
             ani.save('samples/.gif', dpi=80, writer='imagemagick')
-            
-        hook()
+ 
+        if batch_idx==0:  # plot the comparison between prediction and label (two examples)
+            N = 2
+            for idx, (pred, label) in enumerate(zip(pcodec_pred[:N], pcodec_label[:N])):
+                fig, ax = plt.subplots(2,N, figsize=(24, 4))
+                ax.flatten()[idx].imshow(pred[0].T, aspect='auto', origin='lower')
+                ax.flatten()[idx+N].imshow(label[0].T, aspect='auto', origin='lower')
+                self.logger.log_image(key=f"Test/pred", images=[fig])
+                
+            # save the prediction samples (of one batch) and render. 
+            np.save(f'{self.hparams.samples_root}/test_sample.npy', pcodec_pred)
+
+            performed_part, fig = render_sample(pcodec_pred, batch, 
+                                                f"{self.hparams.samples_root}/{self.logger._name}")
+            # performed_part, fig = render_sample(np.load(f'{self.hparams.samples_root}/test_sample_save.npy'), 
+            #                                batch, f"{self.hparams.samples_root}/sample")
+            self.logger.log_image(key=f"Test/tempo_curves", images=[fig])
+            hook()
+
         sampled_loss = self.p_losses(pcodec_label, torch.tensor(pcodec_pred), loss_type='l2')
-        frame_p, frame_r, frame_f1, _ = precision_recall_fscore_support(pcodec_label.flatten(),
-                                                                        pcodec_pred.flatten() > self.hparams.frame_threshold,
-                                                                        average='macro')
         
         self.log(f"Test/sampled_loss", sampled_loss)
-        self.log(f"Test/frame_f1", frame_f1) 
 
         
     # def test_step(self, batch, batch_idx):
@@ -554,13 +554,10 @@ class PCodecDiffusion(pl.LightningModule):
         
         # train to predict the noise, loss is computed for the noise
         if self.hparams.training.mode == 'epsilon':
-            if self.hparams.debug==True: # When debugging model is use, change waveform into roll
-                epsilon_pred, spec = self(x_t, roll, t) # predict the noise N(0, 1)
-            else:
-                epsilon_pred, spec = self(x_t, waveform, t) # predict the noise N(0, 1)
+            epsilon_pred, _ = self(x_t, s_codec, t) # predict the noise N(0, 1)
             diffusion_loss = self.p_losses(noise, epsilon_pred, loss_type=self.hparams.loss_type)
 
-            pred_roll = extract_x0(
+            pred_p_codec = extract_x0(
                 x_t,
                 epsilon_pred,
                 t,
@@ -739,46 +736,46 @@ class PCodecDiffusion(pl.LightningModule):
 
         return model_mean, spec           
         
-    # def cfdg_ddpm(self, x, waveform, t_index):
-    #     # x is Guassian noise
+    def cfdg_ddpm(self, x, waveform, t_index):
+        # x is Guassian noise
         
-    #     # extracting coefficients at time t
-    #     betas_t = self.betas[t_index]
-    #     sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t_index]
-    #     sqrt_recip_alphas_t = self.sqrt_recip_alphas[t_index]
+        # extracting coefficients at time t
+        betas_t = self.betas[t_index]
+        sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t_index]
+        sqrt_recip_alphas_t = self.sqrt_recip_alphas[t_index]
 
-    #     # boardcasting t_index into a tensor
-    #     t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
         
-    #     # Equation 11 in the paper
-    #     # Use our model (noise predictor) to predict the mean 
-    #     epsilon_c, spec = self(x, waveform, t_tensor)
-    #     epsilon_0, _ = self(x, torch.zeros_like(waveform), t_tensor)
-    #     epsilon = (1+self.hparams.sampling.w)*epsilon_c - self.hparams.sampling.w*epsilon_0
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        epsilon_c, spec = self(x, waveform, t_tensor)
+        epsilon_0, _ = self(x, torch.zeros_like(waveform), t_tensor)
+        epsilon = (1+self.hparams.sampling.w)*epsilon_c - self.hparams.sampling.w*epsilon_0
         
-    #     model_mean = sqrt_recip_alphas_t * (
-    #         x - betas_t * epsilon / sqrt_one_minus_alphas_cumprod_t
-    #     )
-    #     if t_index == 0:
-    #         return model_mean, spec
-    #     else:
-    #         # posterior_variance_t = extract(self.posterior_variance, t, x.shape)
-    #         posterior_variance_t = self.posterior_variance[t_index]
-    #         noise = torch.randn_like(x)
-    #         # Algorithm 2 line 4:
-    #         return (model_mean + torch.sqrt(posterior_variance_t) * noise), spec     
+        model_mean = sqrt_recip_alphas_t * (
+            x - betas_t * epsilon / sqrt_one_minus_alphas_cumprod_t
+        )
+        if t_index == 0:
+            return model_mean, spec
+        else:
+            # posterior_variance_t = extract(self.posterior_variance, t, x.shape)
+            posterior_variance_t = self.posterior_variance[t_index]
+            noise = torch.randn_like(x)
+            # Algorithm 2 line 4:
+            return (model_mean + torch.sqrt(posterior_variance_t) * noise), spec     
         
         
-    def cfdg_ddpm_x0(self, x, pcodec, t_index):
+    def cfdg_ddpm_x0(self, x, scodec, t_index):
         # x is x_t, when t=T it is pure Gaussian
         
         # boardcasting t_index into a tensor
         t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
         
         # Algo 1 line 4: Use model (noise predictor) to predict the mean and weight the conditioned & unconditioned
-        x0_pred_c, spec = self(x, pcodec, t_tensor)
-        if type(pcodec) != type(None):
-            x0_pred_0, _ = self(x, torch.zeros_like(pcodec), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
+        x0_pred_c, spec = self(x, scodec, t_tensor)
+        if type(scodec) != type(None):
+            x0_pred_0, _ = self(x, torch.zeros_like(scodec), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
             # wait... is this really weighting???
             x0_pred = (1 + self.hparams.sampling.w) * x0_pred_c - self.hparams.sampling.w * x0_pred_0
         else:
@@ -798,7 +795,33 @@ class PCodecDiffusion(pl.LightningModule):
                             sigma * torch.randn_like(x))
 
         return model_mean, spec
-    
+
+    def cfdg_ddim_x0(self, x, waveform, t_index):
+        # x is x_t, when t=T it is pure Gaussian
+        
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        x0_pred_c, spec = self(x, waveform, t_tensor)
+        x0_pred_0, _ = self(x, torch.zeros_like(waveform), t_tensor)
+        x0_pred = (1 + self.hparams.sampling.w) * x0_pred_c - self.hparams.sampling.w * x0_pred_0
+        # x0_pred = x0_pred_c
+        # x0_pred = x0_pred_0
+
+        if t_index == 0:
+            sigma = 0 
+            model_mean = x0_pred / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            sigma = 0          
+            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * x0_pred + (
+                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index - 1] ** 2 - sigma ** 2) * (
+                    x - self.sqrt_alphas_cumprod[t_index] * x0_pred) / self.sqrt_one_minus_alphas_cumprod[t_index]) + (
+                sigma * torch.randn_like(x))
+
+        return model_mean, spec            
+
     def generation_ddpm_x0(self, x, waveform, t_index):
         # x is x_t, when t=T it is pure Gaussian
         
@@ -809,9 +832,6 @@ class PCodecDiffusion(pl.LightningModule):
         # Use our model (noise predictor) to predict the mean 
         x0_pred_0, _ = self(x, torch.zeros_like(waveform), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
         x0_pred = x0_pred_0
-        
-        # x0_pred = x0_pred_c
-        # x0_pred = x0_pred_0
 
         if t_index == 0:
             sigma = (1/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
@@ -855,36 +875,6 @@ class PCodecDiffusion(pl.LightningModule):
 
         return model_mean, spec
     
-    def cfdg_ddim_x0(self, x, waveform, t_index):
-        # x is x_t, when t=T it is pure Gaussian
-        
-        # boardcasting t_index into a tensor
-        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
-
-        # Equation 11 in the paper
-        # Use our model (noise predictor) to predict the mean 
-        x0_pred, spec = self(x, waveform, t_tensor)
-        
-        # Equation 11 in the paper
-        # Use our model (noise predictor) to predict the mean 
-        x0_pred_c, spec = self(x, waveform, t_tensor)
-        x0_pred_0, _ = self(x, torch.zeros_like(waveform), t_tensor)
-        x0_pred = (1+self.hparams.sampling.w)*x0_pred_c - self.hparams.sampling.w*x0_pred_0
-        # x0_pred = x0_pred_c
-        # x0_pred = x0_pred_0
-
-        if t_index == 0:
-            sigma = 0 
-            model_mean = x0_pred / self.sqrt_alphas_cumprod[t_index] 
-        else:
-            sigma = 0          
-            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * x0_pred + (
-                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index-1]**2 - sigma**2) * (
-                    x-self.sqrt_alphas_cumprod[t_index]* x0_pred)/self.sqrt_one_minus_alphas_cumprod[t_index]) + (
-                sigma * torch.randn_like(x))
-
-        return model_mean, spec            
-
     def configure_optimizers(self):
 
         optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
@@ -917,7 +907,8 @@ class PCodecDiffusion(pl.LightningModule):
         fig.suptitle(f't={t_idx}')
         row1_txt = ax_flat[0].text(-400,45,f'Gaussian N(0,1)')
         row2_txt = ax_flat[4].text(-300,45,'x_{t-1}')       
-        
+
+      
 # functions for roll2midi
 
 def postprocess_probabilities_to_midi_events(output_dict):
@@ -943,7 +934,6 @@ def postprocess_probabilities_to_midi_events(output_dict):
     midi_events = {}
     for k, plugin_name in enumerate(plugin_ids):
         plugin_name = IX_TO_NAME[plugin_name.item()]        
-#         print('Processing plugin_name: {}'.format(plugin_name), end='\r')
 
         if plugin_name == 'percussion':
             (est_note_events, est_pedal_events) = post_processor.output_dict_to_midi_events(

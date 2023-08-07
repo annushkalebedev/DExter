@@ -1,0 +1,63 @@
+gpus: 1
+val_freq: 5
+hop_length: 512
+sequence_length: 327680
+sampling_rate: 16000
+learning_rate: 1e-6
+epochs: 5000
+download: False
+load_trained: False
+test_only: False
+pretrained_path: 'artifacts/checkpoint/len300-beta0.02-steps1500-x_0-L15-C512-cfdg_ddpm_x0-w=0-p=0.1-k=3-dia=2-4/1244e-diffusion_loss0.03.ckpt'
+data_root: './data'
+seg_len: 300
+pin_memory: True
+random_seed: 13
+
+
+dataloader:
+    train:
+        batch_size: 8
+        num_workers: 40
+        shuffle: True
+        pin_memory: ${pin_memory}
+        prefetch_factor: 2
+        persistent_workers: True
+    val:
+        batch_size: 8
+        num_workers: 4
+        shuffle: True
+        pin_memory: ${pin_memory}
+    test:
+        batch_size: 8
+        num_workers: 4
+        shuffle: False
+        pin_memory: ${pin_memory}
+        
+        
+trainer:
+    gpus: ${gpus}
+    max_epochs: ${epochs}
+    check_val_every_n_epoch: ${val_freq}
+    
+modelcheckpoint:
+    # dirpath: 'artifacts/checkpoint'
+    monitor: 'Val/diffusion_loss'
+    filename: '{epoch:02d}e-diffusion_loss{Train/diffusion_loss:.2f}'
+    save_top_k: 2
+    save_last: True
+    mode: "min"
+    auto_insert_metric_name: False    
+    
+
+
+defaults:
+    - model: ClassifierFreeDiffPerformer
+    - task: classifierfree_diffusion
+    - dataset: MAESTRO
+
+
+hydra:  
+  output_subdir: null  
+  run:  
+    dir: .

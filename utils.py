@@ -120,7 +120,7 @@ def animate_sampling(t_idx, fig, ax_flat, caxs, noise_list, total_timesteps):
 
 class Normalization():
     """
-    This class is for normalizing the spectrograms batch by batch.
+    This class is for normalizing the input batch by batch.
     The normalization used is min-max, two modes 'framewise' and 'imagewise' can be selected.
     In this paper, we found that 'imagewise' normalization works better than 'framewise'
     

@@ -51,7 +51,7 @@ def main(cfg):
     name = f"len{cfg.seg_len}-beta{cfg.task.beta_end}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
             f"L{cfg.model.args.residual_layers}-C{cfg.model.args.residual_channels}-" + \
             f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" + \
-            f"p={cfg.model.args.spec_dropout}-k={cfg.model.args.kernel_size}-" + \
+            f"p={cfg.model.args.cond_dropout}-k={cfg.model.args.kernel_size}-" + \
             f"dia={cfg.model.args.dilation_base}-{cfg.model.args.dilation_bound}"
 
     if cfg.test_only:

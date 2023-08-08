@@ -1,173 +1,73 @@
-- __Demo__: https://sony.github.io/DiffRoll/
-- __Paper__: https://arxiv.org/abs/2210.05148
+- __Wandb__: https://wandb.ai/huanz/DiffPerformer
 
 # Table of Content
-<!-- @import "[TOC]" {cmd="toc" depthFrom=1 depthTo=4 orderedList=false} -->
-
-<!-- code_chunk_output -->
-- [Installation](#installation)
 - [Table of Content](#table-of-content)
 - [Installation](#installation)
+- [Dataset and Data processing](#dataset-and-data-processing)
 - [Training](#training)
-  - [Supervised training](#supervised-training)
-  - [Unsupervised pretraining](#unsupervised-pretraining)
-    - [Step 1: Pretraining on MAESTRO using only piano rolls](#step-1-pretraining-on-maestro-using-only-piano-rolls)
-    - [Step 2](#step-2)
-      - [Option A: pre-DiffRoll (p=0.1)](#option-a-pre-diffroll-p01)
-      - [Option B: pre-DiffRoll (p=0+1)](#option-b-pre-diffroll-p01)
-      - [Option C: MAESTRO 0.1](#option-c-maestro-01)
-- [Sampling](#sampling)
-  - [Transcription](#transcription)
-  - [Inpainting](#inpainting)
-  - [Generation](#generation)
+  - [Supervised training with conditioning](#supervised-training-with-conditioning)
+- [Testing](#testing)
 
-<!-- /code_chunk_output -->
 
 
 # Installation
-This repo is developed using `python==3.8.10`, so it is recommended to use `python>=3.8.10`.
+This repo is developed using `python==3.9.7`, so it is recommended to use `python>=3.9.7`.
 
 To install all dependencies
 ```
 pip install -r requirements.txt
 ```
 
+# Dataset and Data processing
+
+Three score-performance aligned datasets are used in this project:
+* ATEPP: https://github.com/BetsyTang/ATEPP 
+  * The above link doesn't contain score-performance aligned match file. Download dataset with [parangonar](https://github.com/sildater/parangonar) alignment computed: https://drive.google.com/file/d/1YsZC_uvaOomIUW0RxqkB_8DNFQlkVl-A/
+* ASAP: https://github.com/CPJKU/asap-dataset 
+* VIENNA422: https://github.com/CPJKU/vienna4x22 
+
+The following script converts the scores and performances in the datasets into performance codec ```p_codec``` and score codec ```s_codec```. Output will be saved in ```data/```. Notice that different ```MAX_NOTE_SEQ``` will lead to different truncation of ```snote_ids``` and saved separately. 
+
+```
+python prepare_data.py --MAX_NOTE_SEQ=100
+```
+- ```MAX_NOTE_LEN```: The length of note sequence to split.
+
+For pre-computed codec, please [download](https://drive.google.com/file/d/1o91jYxOMsbXZZvfE7Z_8hM6DJbXixoXb/view?usp=sharing) and unzip. It contains the codec and snote_ids of ```MAX_NOTE_LEN=100, 300, 1000```. 
+
+Before training, put the pre-computed codec in ```data``` under the root folder. However, for testing and output decoded performance, you will need the originl score XML from the 3 datasets. Please download them and put them under ```Dataset``` in the same level as root folder (we need the score to decode performance). 
+
+![plot](doc/codec_visualization.png)
+
 # Training
 
-## Supervised training
+## Supervised training with conditioning
 ```
-python train_spec_roll.py gpus=[0] model.args.kernel_size=9 model.args.spec_dropout=0.1 dataset=MAESTRO dataloader.train.num_workers=4 epochs=2500 download=True
+python train.py gpus=[0] task.timestep=1000
 ```
-
 
 - `gpus` sets which GPU to use. `gpus=[k]` means `device='cuda:k'`, `gpus=2` means [DistributedDataParallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html) (DDP) is used with two GPUs.
-- `model.args.kernel_size` sets the kernel size for the ResNet layers in DiffRoll. `model.args.kernel_size=9` performs the best according to our experiments.
-- `model.args.spec_dropout` sets the dropout rate ($p$ in the paper)
-- `dataset` sets the dataset to be trained on. Can be `MAESTRO` or `MAPS`.
-- `dataloader.train.num_workers` sets the number of workers for train loader.
-- `download` should be set to `True` if you are running the script for the first time to download and setup the dataset automatically. You can set it to `False` if you already have the dataset downloaded.
+- `timesteps` set the number of denoising timesteps.
+- For a full list of parameters please refer to `train.yaml` and `task/classifierfree_diffusion.yaml`
 
-The checkpoints and training logs are avaliable at `outputs/YYYY-MM-DD/HH-MM-SS/`. 
+The checkpoints will be output to `artifacts/checkpoint/`
 
-To check the progress of training using TensorBoard, you can use the command below
-```
-tensorboard --logdir='./outputs'
-```
-
-## Unsupervised pretraining
-### Step 1: Pretraining on MAESTRO using only piano rolls
-```
-python train_spec_roll.py gpus=[0] model.args.kernel_size=9 model.args.spec_dropout=1 dataset=MAESTRO dataloader.train.num_workers=4 epochs=2500
-```
-
-- `model.args.spec_dropout` sets the dropout rate ($p$ in the paper). When it is set to `1`, it means no spectrograms will be used (all spectrograms dropped to `-1`)
-- other arguments are same as [Supervised Training](#supervised-training).
-
-The pretrained checkpoints are avaliable at `outputs/YYYY-MM-DD/HH-MM-SS/ClassifierFreeDiffRoll/version_1/checkpoints`.
-
-After this, you can choose one of the options ([2A](#option-a-pre-diffroll-p01), [2B](#option-b-pre-diffroll-p01), or [2C](#option-c-maestro-01)) to continue training below.
+To check the progress, please go to the wandb page. 
 
 
-### Step 2
-Choose one of the options below ([A](#option-a-pre-diffroll-p01), [B](#option-b-pre-diffroll-p01), or [C](#option-c-maestro-01)).
-#### Option A: pre-DiffRoll (p=0.1)
-
-```
-python continue_train_single.py gpus=[0] model.args.kernel_size=9 model.args.spec_dropout=0.1 dataset=MAPS dataloader.train.num_workers=4 epochs=10000 pretrained_path='path_to_your_weights' 
-```
-
-- `pretrained_path` specifies the location of pretrained weights obtained in [Step 1](#step-1-pretraining-on-maestro-using-only-piano-rolls)
-- other arguments are same as [Supervised Training](#supervised-training).
-
-
-#### Option B: pre-DiffRoll (p=0+1)
-
-```
-python continue_train_both.py gpus=[0] model.args.kernel_size=9 model.args.spec_dropout=0 dataset=Both dataloader.train.num_workers=4epochs=10000 pretrained_path='path_to_your_weights' 
-```
-
-- `pretrained_path` specifies the location of pretrained weights obtained in [Step 1](#step-1-pretraining-on-maestro-using-only-piano-rolls)
-- `model.args.spec_dropout` controls the dropout for the MAPS dataset. The MAESTRO dataset is always set to p=-1. 
-- other arguments are same as [Supervised Training](#supervised-training).
-
-#### Option C: MAESTRO 0.1
-This option is not reported in the paper, but it is the best.
-
-```
-python continue_train_single.py gpus=[0] model.args.kernel_size=9 model.args.spec_dropout=0 dataset=MAESTRO dataloader.train.num_workers=4 epochs=2500 pretrained_path='path_to_your_weights' 
-```
-
-- `pretrained_path` specifies the location of pretrained weights obtained in [Step 1](#step-1-pretraining-on-maestro-using-only-piano-rolls)
-- other arguments are same as [Supervised Training](#supervised-training).
 
 # Testing
-The training script above already includes the testing. This section is for you to re-run the test set and get the transcription score.
+The training script above already includes the testing.
 
-First, open `config/test.yaml`, and then specify the weight to use in `checkpoint_path`.
+First, open `config/train.yaml`, and then specify the weight to use in `pretrained_path`, for example `pretrained_path='artifacts/checkpoint/len300-beta0.02-steps1500-x_0-L15-C512-cfdg_ddpm_x0-w=0-p=0.1-k=3-dia=2-4/1244e-diffusion_loss0.03.ckpt'`. Or you can specify in the command line.
 
-For example, if you want to use `Pretrain_MAESTRO-retrain_Both-k=9.ckpt`, then set  `checkpoint_path='weights/Pretrain_MAESTRO-retrain_Both-k=9.ckpt'`.
-
-You can download pretrained weights from [Zenodo](https://zenodo.org/record/7246522#.Y2tXoi0RphE). After downloading, put them inside the folder `weights`.
+<!-- You can download pretrained weights from [Zenodo](https://zenodo.org/record/7246522#.Y2tXoi0RphE). After downloading, put them inside the folder `weights`. -->
 
 ```
-python test.py gpus=[0] dataset=MAPS
+python train.py gpus=[0] --test_only=True --load_pretrained=True
 ```
 
-- `dataset` sets the dataset to be trained on. Can be `MAESTRO` or `MAPS`.
-
-# Sampling
-You can download pretrained weights from [Zenodo](https://zenodo.org/record/7246522#.Y2tXoi0RphE). After downloading, put them inside the folder `weights`.
-
-The folder `my_audio` already includes four samples as a demonstration. You can put your own audio clips inside this folder.
-
-## Transcription
-This script supports only transcribing music from either MAPS or MAESTRO.
-
-TODO: add support for transcribing any music
-
-First, open `config/test.yaml`, and then specify the weight to use in `checkpoint_path`.
-
-For example, if you want to use `Pretrain_MAESTRO-retrain_MAESTRO-k=9.ckpt`, then set  `checkpoint_path='weights/Pretrain_MAESTRO-retrain_MAESTRO-k=9.ckpt'`.
-
-```
-python sampling.py task=transcription dataloader.batch_size=4 dataset=Custom dataset.args.audio_ext=mp3 dataset.args.max_segment_samples=327680 gpus=[0]
-```
-
-- `dataloader.batch_size` sets the batch size. You can set a higher number if your GPU has enough memory.
-- `dataset` when setting to `Custom`, it load audio clips from the folder `my_audio`.
-- `dataset.args.audio_ext` sets the file extension to be loaded. The default extension is `mp3`.
-- `dataset.args.max_segment_samples` sets length of audio segment to be loaded. If it is smaller than the actual audio clip duration, the first `max_segment_samples` samples of the audio clip would be loaded. If it is larger than the actual audio clip, the audio clip will be padded to `max_segment_samples` with 0. The default value is `327680` which is around 10 seconds when `sample_rate=16000`.
-- `gpus` sets which GPU to use. `gpus=[k]` means `device='cuda:k'`, `gpus=2` means [DistributedDataParallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html) (DDP) is used with two GPUs.
-
-## Inpainting
-This script supports only transcribing music from either MAPS or MAESTRO.
-
-TODO: add support for transcribing any music
-
-First, open `config/sampling.yaml`, and then specify the weight to use in `checkpoint_path`.
-
-For example, if you want to use `Pretrain_MAESTRO-retrain_Both-k=9.ckpt`, then set  `checkpoint_path='weights/Pretrain_MAESTRO-retrain_Both-k=9.ckpt'`.
-
-```
-python sampling.py task=inpainting task.inpainting_t=[0,100] dataloader.batch_size=4 dataset=Custom dataset.args.audio_ext=mp3 dataset.args.max_segment_samples=327680 gpus=[0]
-```
-
-- `gpus` sets which GPU to use. `gpus=[k]` means `device='cuda:k'`, `gpus=2` means [DistributedDataParallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html) (DDP) is used with two GPUs.
-- `task.inpainting_t` sets the frames to be masked to -1 in the spectrogram. `[0,100]` means that frame 0-99 will be masked to -1.
-- `dataloader.batch_size` sets the batch size. You can set a higher number if your GPU has enough memory.
-- `dataset` when setting to `Custom`, it load audio clips from the folder `my_audio`.
-- `dataset.args.audio_ext` sets the file extension to be loaded. The default extension is `mp3`.
-- `dataset.args.max_segment_samples` sets length of audio segment to be loaded. If it is smaller than the actual audio clip duration, the first `max_segment_samples` samples of the audio clip would be loaded. If it is larger than the actual audio clip, the audio clip will be padded to `max_segment_samples` with 0. The default value is `327680` which is around 10 seconds when `sample_rate=16000`.
-
-## Generation
-First, open `config/sampling.yaml`, and then specify the weight to use in `checkpoint_path`.
-
-For example, if you want to use `Pretrain_MAESTRO-retrain_Both-k=9.ckpt`, then set  `checkpoint_path='weights/Pretrain_MAESTRO-retrain_Both-k=9.ckpt'`.
-
-```
-python sampling.py task=generation dataset.num_samples=8 dataloader.batch_size=4
-
-```
-
-- `generation dataset.num_sample` sets the number of piano rolls to be generated.
-- `dataloader.batch_size` sets the batch size of the dataloader. If you have enough GPU memory, you can set `dataloader.batch_size` to be equal to `dataset.num_samples` to generate everything in one go.
+During testing, the following will be generated / evaluated: 
+- Testing set samples generated from the testing data. Output into `artifacts/samples/`
+- Tempo curve and velocity curve. If `WANDB_DISALBED=False` this will be uploaded to the wandb workspace. 
+- 

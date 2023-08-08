@@ -578,12 +578,12 @@ class ClassifierFreeDiffPerformer(PCodecDiffusion):
                  dilation_base = 1,
                  dilation_bound = 4,
                  spec_args = {},
-                 spec_dropout = 0.5,
+                 cond_dropout = 0.5,
                  inpainting_t = None,
                  inpainting_f = None,
                  samples_root = "artifacts/samples",
                  **kwargs):
-        self.spec_dropout = spec_dropout
+        self.cond_dropout = cond_dropout
         super().__init__(**kwargs)
 
         self.condition_normalize = Normalization(norm_args[0], norm_args[1], norm_args[2])
@@ -635,7 +635,7 @@ class ClassifierFreeDiffPerformer(PCodecDiffusion):
             condition = condition.float()
             condition = self.condition_normalize(condition)
             if self.training: # only use dropout druing training
-                condition = self.uncon_dropout(condition, self.hparams.spec_dropout) # making some score 0 to be unconditional
+                condition = self.uncon_dropout(condition, self.hparams.cond_dropout) # making some score 0 to be unconditional
                            
             if sampling==True:
                 if self.hparams.condition == 'trainable_score':

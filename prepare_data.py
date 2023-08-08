@@ -1,4 +1,5 @@
 import os, sys, glob
+import argparse
 import warnings
 warnings.simplefilter("ignore")
 sys.path.insert(0, "../partitura")
@@ -28,7 +29,6 @@ BMZ_MUSICXML_DIR = "../Datasets/pianodata-master/xml/"
 ATEPP_DIR = "../Datasets/ATEPP-1.1"
 ATEPP_META_DIR = "../Datasets/ATEPP-1.1/ATEPP-metadata-1.3.csv"
 
-MAX_NOTE_LEN = 1000
 
 
 def load_dataset_codec(dataset='ASAP', return_metadata=False):
@@ -66,7 +66,7 @@ def load_dataset_codec(dataset='ASAP', return_metadata=False):
     return pf
 
 
-def process_dataset_codec():
+def process_dataset_codec(max_note_len):
     """process the performance features for the given dataset. Save the 
     computed features in the form of numpy arrays in the same directory as 
     performance data.
@@ -76,6 +76,7 @@ def process_dataset_codec():
     """
 
     prev_s_path, data = None, []
+    os.makedirs(f"data/snote_ids/N={max_note_len}", exist_ok=True)
     for dataset in ['ATEPP', 'ASAP', 'VIENNA422']:
 
         if dataset == "VIENNA422":
@@ -133,7 +134,7 @@ def process_dataset_codec():
                     piece_name = "_".join(s_path.split("alignment/")[-1].split("/")[:-1])
                 if dataset == 'ATEPP':
                     piece_name = p_path.split("/")[-1][:-4] 
-                save_snote_id_path = f"data/snote_ids/N={MAX_NOTE_LEN}/{dataset}_{piece_name}"
+                save_snote_id_path = f"data/snote_ids/N={max_note_len}/{dataset}_{piece_name}"
 
                 # encode!
                 if prev_s_path == s_path:
@@ -153,19 +154,19 @@ def process_dataset_codec():
                     continue
 
                 # split the piece 
-                for idx in range(0, len(p_codec), MAX_NOTE_LEN):
-                    seg_p_codec = p_codec[idx : idx + MAX_NOTE_LEN]
-                    seg_s_codec = s_codec[idx : idx + MAX_NOTE_LEN]
-                    seg_snote_ids = snote_ids[idx : idx + MAX_NOTE_LEN]
+                for idx in range(0, len(p_codec), max_note_len):
+                    seg_p_codec = p_codec[idx : idx + max_note_len]
+                    seg_s_codec = s_codec[idx : idx + max_note_len]
+                    seg_snote_ids = snote_ids[idx : idx + max_note_len]
 
-                    if len(seg_p_codec) < MAX_NOTE_LEN:
-                        seg_p_codec = np.pad(seg_p_codec, ((0, MAX_NOTE_LEN - len(seg_p_codec)), (0, 0)), mode='constant', constant_values=0)
-                        seg_s_codec = np.pad(seg_s_codec, ((0, MAX_NOTE_LEN - len(seg_s_codec)), (0, 0)), mode='constant', constant_values=0)
+                    if len(seg_p_codec) < max_note_len:
+                        seg_p_codec = np.pad(seg_p_codec, ((0, max_note_len - len(seg_p_codec)), (0, 0)), mode='constant', constant_values=0)
+                        seg_s_codec = np.pad(seg_s_codec, ((0, max_note_len - len(seg_s_codec)), (0, 0)), mode='constant', constant_values=0)
 
                     if len(seg_snote_ids) == 0:
                         hook()
 
-                    seg_id_path = f"{save_snote_id_path}_seg{int(idx/MAX_NOTE_LEN)}.npy"
+                    seg_id_path = f"{save_snote_id_path}_seg{int(idx/max_note_len)}.npy"
                     # save snote_id
                     np.save(seg_id_path, seg_snote_ids) 
 
@@ -182,7 +183,7 @@ def process_dataset_codec():
 
 
     # print(max([data[i].shape[0] for i in range(22)]))
-    np.save(f"data/codec_N={MAX_NOTE_LEN}.npy", np.stack(data))
+    np.save(f"data/codec_N={max_note_len}.npy", np.stack(data))
 
     return 
 
@@ -268,8 +269,10 @@ def plot_codec_list(codec_list):
 
 if __name__ == '__main__':
 
-
-    # process_dataset_codec()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--MAX_NOTE_LEN', type=int, required=True)
+    args = parser.parse_args()
+    process_dataset_codec(args.MAX_NOTE_LEN)
     # codec_data_analysis()
 
     # from utils import parameters_to_performance_array

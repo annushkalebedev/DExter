@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from inspect import isfunction
 from functools import partial
 import math
-from task.diffusion import RollDiffusion, PCodecDiffusion
+from task.diffusion import RollDiffusion, CodecDiffusion
 import torchaudio
 EPSILON = 1e-6
 
@@ -409,7 +409,7 @@ class SpecConvNextBlockUp(nn.Module):
         spec_h = self.spec_net(spec_h)
         return h + self.res_conv(x), spec_h    
     
-class SpecUnet(PCodecDiffusion):
+class SpecUnet(CodecDiffusion):
     # Unet conditioned on spectrogram
     def __init__(
         self,

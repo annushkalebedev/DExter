@@ -1,7 +1,0 @@
-name: 'DiffRoll'
-args:
-    residual_channels: 512
-    unconditional: False
-    n_mels: ${spec.args.n_mels}
-    residual_layers: 15
-    dilation_base: 1

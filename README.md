@@ -4,6 +4,7 @@
 - [Table of Content](#table-of-content)
 - [Installation](#installation)
 - [Dataset and Data processing](#dataset-and-data-processing)
+  - [Testing set](#testing-set)
 - [Training](#training)
   - [Supervised training with conditioning](#supervised-training-with-conditioning)
 - [Testing](#testing)
@@ -39,6 +40,10 @@ Before training, put the pre-computed codec in ```data``` under the root folder.
 
 ![plot](doc/codec_visualization.png)
 
+## Testing set
+
+
+
 # Training
 
 ## Supervised training with conditioning
@@ -57,7 +62,7 @@ To check the progress, please go to the wandb page.
 
 
 # Testing
-The training script above already includes the testing.
+The training script above already includes the testing. (testing is run every 100 epochs of training.)
 
 First, open `config/train.yaml`, and then specify the weight to use in `pretrained_path`, for example `pretrained_path='artifacts/checkpoint/len300-beta0.02-steps1500-x_0-L15-C512-cfdg_ddpm_x0-w=0-p=0.1-k=3-dia=2-4/1244e-diffusion_loss0.03.ckpt'`. Or you can specify in the command line.
 
@@ -68,6 +73,8 @@ python train.py gpus=[0] --test_only=True --load_pretrained=True
 ```
 
 During testing, the following will be generated / evaluated: 
-- Testing set samples generated from the testing data. Output into `artifacts/samples/`
+- Sampling the testing set data.
+- Render the samples (first 8 is the subjective test set). Output into `artifacts/samples/`
+- Animation of the predicted p_codec from noise
 - Tempo curve and velocity curve. If `WANDB_DISALBED=False` this will be uploaded to the wandb workspace. 
-- 
+- Comparison between the pred p_codec and label p_codec.

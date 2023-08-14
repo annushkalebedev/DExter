@@ -1,6 +1,8 @@
 import sys
 sys.path.insert(0, "../partitura")
 sys.path.insert(0, "../")
+import warnings
+warnings.filterwarnings('ignore')
 import partitura as pt
 from tqdm import tqdm
 import numpy as np
@@ -10,12 +12,11 @@ import model as Model
 import torch
 torch.set_printoptions(sci_mode=False)
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
-from torch.optim import Adam
 
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
+from utils import *
 import hook
     
 
@@ -34,9 +35,10 @@ def main(cfg):
     # N = 300: 68,981
     # N = 100: 200,315 
     
-    val_idx = int(len(codec_data) * 0.15)
-    train_loader = DataLoader(codec_data[val_idx:], **cfg.dataloader.train)
-    val_loader = DataLoader(codec_data[:val_idx], **cfg.dataloader.val)    
+    # pick the specific group into the first batch of validation 
+    train_set, valid_set = split_train_valid(codec_data)
+    train_loader = DataLoader(train_set, **cfg.dataloader.train)
+    val_loader = DataLoader(valid_set, **cfg.dataloader.val)    
 
     # Model
     if cfg.load_trained:
@@ -65,6 +67,7 @@ def main(cfg):
                          )
     if not cfg.test_only:
         trainer.fit(model, train_loader, val_loader)
+    
     trainer.test(model, val_loader)
     
 if __name__ == "__main__":

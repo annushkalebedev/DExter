@@ -1,2 +1,2 @@
-from .diffwave import DiffRoll, DiffRollv2, DiffRollv2Debug, DiffRollDebug, DiffRollBaseline, ClassifierFreeDiffPerformer
+from .diffwave import ClassifierFreeDenoiser
 from .unet import SpecUnet

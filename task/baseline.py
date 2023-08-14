@@ -7,7 +7,6 @@ import torch.nn as nn
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 from sklearn.metrics import precision_recall_fscore_support
-from .utils import extract_notes_wo_velocity
 from mir_eval.transcription import precision_recall_f1_overlap as evaluate_notes
 from mir_eval.util import midi_to_hz
 import numpy as np

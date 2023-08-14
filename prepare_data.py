@@ -149,7 +149,7 @@ def process_dataset_codec(max_note_len):
                 s_codec = rfn.structured_to_unstructured(
                     sna[['onset_div', 'duration_div', 'pitch', 'voice']])
 
-                if not ((p_codec.shape == s_codec.shape) and (len(p_codec) == len(snote_ids))):
+                if not ((len(p_codec) == len(s_codec)) and (len(p_codec) == len(snote_ids))):
                     print(f"{a_path} has length issue: p: {len(p_codec)}; s: {len(s_codec)}") 
                     continue
 
@@ -233,7 +233,7 @@ def render_sample(score_part, sample_path, snote_ids_path):
 
 def codec_data_analysis():
     # look at the distribution of the bp, velocity...
-    codec_data = np.load(f"./data/p_codec_N=100.npy", allow_pickle=True) # (N_data, 1000, 4)
+    codec_data = np.load(f"./data/codec_N=100.npy", allow_pickle=True) # (N_data, 1000, 4)
     p_codecs = [cd['p_codec'] for cd in codec_data]
 
 
@@ -272,22 +272,28 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--MAX_NOTE_LEN', type=int, required=True)
     args = parser.parse_args()
+
     process_dataset_codec(args.MAX_NOTE_LEN)
     # codec_data_analysis()
 
     # from utils import parameters_to_performance_array
-    codec_data = np.load("data/codec_N=100.npy", allow_pickle=True) 
+    # codec_data = np.load("data/codec_N=300.npy", allow_pickle=True) 
+    # # plot_codec_list(codec_data[-110:-105])
 
-    plot_codec_list(codec_data[-110:-105])
+    # for data in codec_data:
+    #     if '11579_seg2' in data['snote_id_path']:
+    #         score = pt.load_musicxml(data['score_path'], force_note_ids='keep')
+    #         # score = pt.score.unfold_part_maximal(pt.score.merge_parts(score.parts)) 
+    #         snote_ids = np.load(data['snote_id_path'])
+    #         performed_part = pt.musicanalysis.decode_performance(score, parameters_to_performance_array(data['p_codec']), snote_ids=snote_ids)
+    #         pt.save_performance_midi(performed_part, "tmp0.mid")
+    #         hook()
 
-    # score = pt.load_musicxml(data['score_path'], force_note_ids='keep')
-    # # score = pt.score.unfold_part_maximal(pt.score.merge_parts(score.parts)) 
-    # snote_ids = np.load(data['snote_id_path'])
-    # N = len(snote_ids)
-    # performed_part = pt.musicanalysis.decode_performance(score, parameters_to_performance_array(data['p_codec'])[:N], snote_ids=snote_ids)
+    # score = pt.load_musicxml("../Datasets/vienna4x22/musicxml/Schubert_D783_no15.musicxml")
+    # performance = pt.load_performance("../Datasets/vienna4x22/midi/Schubert_D783_no15_p01.mid")
+    # _, alignment = pt.load_match("../Datasets/vienna4x22/match/Schubert_D783_no15_p01.match")
+    # parameters, snote_ids, _ = pt.musicanalysis.encode_performance(score, performance, alignment)
+    # performed_part = pt.musicanalysis.decode_performance(score, parameters, snote_ids=snote_ids)
     # pt.save_performance_midi(performed_part, "tmp0.mid")
-    hook()
-
-    # score = pt.load_musicxml("../Datasets/vienna4x22/musicxml/Schubert_D783_no15.musicxml", force_note_ids=True)
     # score_part = pt.score.unfold_part_maximal(pt.score.merge_parts(score.parts)) 
     # performed_part = render_sample(score_part, "logs/log_conv_transformer_melody_156/samples/samples_4000.npz.npy", "tmp.npy")

@@ -1,10 +1,7 @@
 gpus: 1
-val_freq: 100
-hop_length: 512
-sequence_length: 327680
-sampling_rate: 16000
+val_freq: 200
 learning_rate: 1e-6
-epochs: 5000
+epochs: 1500
 download: False
 load_trained: False
 test_only: False
@@ -17,7 +14,7 @@ random_seed: 13
 
 dataloader:
     train:
-        batch_size: 8
+        batch_size: 32
         num_workers: 40
         shuffle: True
         pin_memory: ${pin_memory}
@@ -26,7 +23,7 @@ dataloader:
     val:
         batch_size: 8
         num_workers: 4
-        shuffle: True
+        shuffle: False
         pin_memory: ${pin_memory}
     test:
         batch_size: 8
@@ -52,7 +49,7 @@ modelcheckpoint:
 
 
 defaults:
-    - model: ClassifierFreeDiffPerformer
+    - model: ClassifierFreeDenoiser
     - task: classifierfree_diffusion
     - dataset: MAESTRO
 

@@ -29,6 +29,14 @@ class Normalization():
                 x_scaled = x_std * (max - min) + min
                 x_scaled[torch.isnan(x_scaled)]=min # if piano roll is empty, turn them to min
                 return x_scaled
+        elif mode == 'rowwise':
+            def normalize(x):
+                x_max = x.max(2)[0].unsqueeze(2)
+                x_min = x.min(2)[0].unsqueeze(2)
+                x_std = (x-x_min)/(x_max-x_min)
+                x_scaled = x_std * (max - min) + min
+                x_scaled[torch.isnan(x_scaled)]=min 
+                return x_scaled            
         else:
             print(f'please choose the correct mode')
         self.normalize = normalize

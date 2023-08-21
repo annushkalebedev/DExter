@@ -1,0 +1,740 @@
+import os
+import pytorch_lightning as pl
+import torch
+import torch.nn.functional as F
+import torch.nn as nn
+import matplotlib.pyplot as plt
+from tqdm import tqdm
+from sklearn.metrics import precision_recall_fscore_support
+import numpy as np
+import matplotlib.animation as animation
+from mpl_toolkits.axes_grid1 import make_axes_locatable
+MIN_MIDI = 21
+MAX_MIDI = 108
+HOP_LENGTH = 160
+SAMPLE_RATE = 16000
+
+import partitura as pt
+from utils import animate_sampling, render_sample, Normalization, plot_codec
+
+# from model.utils import Normalization
+def linear_beta_schedule(beta_start, beta_end, timesteps):
+    return torch.linspace(beta_start, beta_end, timesteps)
+
+def q_sample(x_start, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise=None):
+    """
+    x_start: x0 (B, 1, T, F)
+    t: timestep information (B,)
+    """    
+    # sqrt_alphas is mean of the Gaussian N() - for the forward process distribution
+    sqrt_alphas_cumprod_t = sqrt_alphas_cumprod[t] # extract the value of \bar{\alpha} at time=t
+    # one minus alphas is variance of the Gaussian N()
+    sqrt_one_minus_alphas_cumprod_t = sqrt_one_minus_alphas_cumprod[t]
+    
+    # boardcasting into correct shape
+    sqrt_alphas_cumprod_t = sqrt_alphas_cumprod_t[:, None, None, None].to(x_start.device)
+    sqrt_one_minus_alphas_cumprod_t = sqrt_one_minus_alphas_cumprod_t[:, None, None, None].to(x_start.device)
+
+    # scale down the input, and scale up the noise as time increases?
+    return sqrt_alphas_cumprod_t * x_start + sqrt_one_minus_alphas_cumprod_t * noise
+
+
+def extract_x0(x_t, epsilon, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod):
+    """
+    x_t: The output from q_sample
+    epsilon: The noise predicted from the model
+    t: timestep information
+    """
+    # sqrt_alphas is mean of the Gaussian N()    
+    sqrt_alphas_cumprod_t = sqrt_alphas_cumprod[t] # extract the value of \bar{\alpha} at time=t
+    sqrt_one_minus_alphas_cumprod_t = sqrt_one_minus_alphas_cumprod[t]
+    
+    sqrt_alphas_cumprod_t = sqrt_alphas_cumprod_t[:, None, None, None].to(x_t.device)
+    sqrt_one_minus_alphas_cumprod_t = sqrt_one_minus_alphas_cumprod_t[:, None, None, None].to(x_t.device)    
+
+    # obtaining x0 based on the inverse of eq.4 of DDPM paper
+    return (x_t - sqrt_one_minus_alphas_cumprod_t * epsilon) / sqrt_alphas_cumprod_t
+
+
+class RollDiffusion(pl.LightningModule):
+    def __init__(self,
+                 lr,
+                 timesteps,
+                 loss_type,
+                 beta_start,
+                ):
+        super().__init__()
+        
+        self.save_hyperparameters()
+        
+        # define beta schedule
+        # beta is variance
+        self.betas = linear_beta_schedule(timesteps=timesteps)
+
+        # define alphas - reparameterization
+        alphas = 1. - self.betas
+        alphas_cumprod = torch.cumprod(alphas, axis=0)  # alpha bar
+        alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
+        self.sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        self.posterior_variance = self.betas * (1. - alphas_cumprod_prev) / (1. - alphas_cumprod)
+
+    def training_step(self, batch, batch_idx):
+        batch_size = batch["frame"].shape[0]
+        batch = batch["frame"].unsqueeze(1)  
+        device = batch.device
+        # Algorithm 1 line 3: sample t uniformally for every example in the batch
+        t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long()
+
+        loss = self.p_losses(batch, t, self.sqrt_alphas_cumprod, self.sqrt_one_minus_alphas_cumprod, loss_type=self.hparams.loss_type)
+        self.log("Train/loss", loss)            
+      
+        return loss
+    
+    def validation_step(self, batch, batch_idx):
+        batch_size = batch["frame"].shape[0]
+        batch = batch["frame"].unsqueeze(1)  
+        device = batch.device
+        # Algorithm 1 line 3: sample t uniformally for every example in the batch
+        t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long()
+
+        loss = self.p_losses(batch, t, self.sqrt_alphas_cumprod, self.sqrt_one_minus_alphas_cumprod, loss_type=self.hparams.loss_type)
+        self.log("Val/loss", loss)
+        
+    def test_step(self, batch, batch_idx):
+        batch_size = batch["frame"].shape[0]
+        batch = batch["frame"].unsqueeze(1)
+        device = batch.device
+        
+        
+        # Algorithm 1 line 3: sample t uniformally for every example in the batch
+        t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long()
+
+        loss = self.p_losses(batch, t, self.sqrt_alphas_cumprod, self.sqrt_one_minus_alphas_cumprod, loss_type=self.hparams.loss_type)
+        self.log("Test/loss", loss)        
+        
+    def predict_step(self, batch, batch_idx):
+        # inference code
+        # Unwrapping TensorDataset (list)
+        # It is a pure noise
+        img = batch[0]
+        b = img.shape[0] # extracting batchsize
+        device=img.device
+        imgs = []
+        for i in tqdm(reversed(range(0, self.hparams.timesteps)), desc='sampling loop time step', total=self.hparams.timesteps):
+            img = self.p_sample(
+                           img,
+                           i)
+            img_npy = img.cpu().numpy()
+            
+            if (i+1)%10==0:
+                for idx, j in enumerate(img_npy):
+                    # j (1, T, F)
+                    fig, ax = plt.subplots(1,1)
+                    ax.imshow(j[0].T, aspect='auto', origin='lower')
+                    self.logger.experiment.add_figure(
+                        f"sample_{idx}",
+                        fig,
+                        global_step=self.hparams.timesteps-i)
+                    # self.hparams.timesteps-i is used because slide bar won't show
+                    # if global step starts from self.hparams.timesteps
+            imgs.append(img_npy)
+        torch.save(imgs, 'imgs.pt')
+    
+    def p_losses(self, x_start, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod, noise=None, loss_type="l1"):
+        if noise is None:
+            noise = torch.randn_like(x_start)
+
+        x_noisy = q_sample(x_start=x_start, t=t, sqrt_alphas_cumprod=sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod=sqrt_one_minus_alphas_cumprod, noise=noise)
+        predicted_noise = self(x_noisy, t)
+
+        if loss_type == 'l1':
+            loss = F.l1_loss(noise, predicted_noise)
+        elif loss_type == 'l2':
+            loss = F.mse_loss(noise, predicted_noise)
+        elif loss_type == "huber":
+            loss = F.smooth_l1_loss(noise, predicted_noise)
+        else:
+            raise NotImplementedError()
+
+        return loss
+    
+    def p_sample(self, x, t_index):
+        # x is Guassian noise
+        
+        # extracting coefficients at time t
+        betas_t = self.betas[t_index]
+        sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t_index]
+        sqrt_recip_alphas_t = self.sqrt_recip_alphas[t_index]
+
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean        
+        model_mean = sqrt_recip_alphas_t * (
+            x - betas_t * self(x, t_tensor) / sqrt_one_minus_alphas_cumprod_t
+        )
+
+        if t_index == 0:
+            return model_mean
+        else:
+            # posterior_variance_t = extract(self.posterior_variance, t, x.shape)
+            posterior_variance_t = self.posterior_variance[t_index]
+            noise = torch.randn_like(x)
+            # Algorithm 2 line 4:
+            return model_mean + torch.sqrt(posterior_variance_t) * noise             
+ 
+    def configure_optimizers(self):
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+#         scheduler = TriStageLRSchedule(optimizer,
+#                                        [1e-8, self.hparams.lr, 1e-8],
+#                                        [0.2,0.6,0.2],
+#                                        max_update=len(self.train_dataloader.dataloader)*self.trainer.max_epochs)   
+#         scheduler = MultiStepLR(optimizer, [1,3,5,7,9], gamma=0.1, last_epoch=-1, verbose=False)
+
+#         return [optimizer], [{"scheduler":scheduler, "interval": "step"}]
+        return [optimizer]
+
+
+class CodecDiffusion(pl.LightningModule):
+    def __init__(self,
+                 lr,
+                 timesteps,
+                 loss_type,
+                 loss_keys,
+                 beta_start,
+                 beta_end,                 
+                 training,
+                 sampling,
+                 samples_root,
+                 debug=False,
+                 generation_filter=0.0,
+                 **kwargs
+                ):
+        super().__init__()
+        
+        self.save_hyperparameters()
+
+        self.input_normalize = Normalization(0, 1, 'imagewise')
+        
+        # define beta schedule (beta is variance)
+        self.betas = linear_beta_schedule(beta_start, beta_end, timesteps=timesteps)
+
+        # define alphas 
+        alphas = 1. - self.betas
+        alphas_cumprod = torch.cumprod(alphas, axis=0)
+        alphas_cumprod_prev = F.pad(alphas_cumprod[:-1], (1, 0), value=1.0)
+        self.sqrt_recip_alphas = torch.sqrt(1.0 / alphas)
+
+        # calculations for diffusion q(x_t | x_{t-1}) and others
+        self.sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+        self.sqrt_one_minus_alphas_cumprod = torch.sqrt(1. - alphas_cumprod)
+
+        # calculations for posterior q(x_{t-1} | x_t, x_0)
+        self.posterior_variance = self.betas * (1. - alphas_cumprod_prev) / (1- alphas_cumprod)
+        self.inner_loop = tqdm(range(self.hparams.timesteps), desc='sampling loop time step')
+        
+        self.reverse_diffusion = getattr(self, sampling.type) # bound method cfdg_ddpm_x0, from task config
+        self.alphas = alphas
+
+    def training_step(self, batch, batch_idx):
+        losses, tensors = self.step(batch)
+
+        # self.log("Train/amt_loss", losses['amt_loss'])
+        
+        # calculating total loss based on keys give
+        total_loss = 0
+        for k in self.hparams.loss_keys:
+            total_loss += losses[k]
+            self.log(f"Train/{k}", losses[k])            
+            
+        return total_loss
+    
+    def validation_step(self, batch, batch_idx, save_animation=False):
+        losses, tensors = self.step(batch)
+        total_loss = 0
+        for k in self.hparams.loss_keys:
+            total_loss += losses[k]
+            self.log(f"Val/{k}", losses[k])           
+    
+        if batch_idx == 0: 
+
+            sampled_loss, fig = self.predict(batch, save_animation=save_animation)
+            
+            self.logger.log_image(key=f"Val/tempo_curves", images=[fig])
+            self.log(f"Val/sampled_loss", sampled_loss)
+
+    def test_step(self, batch, batch_idx, save_animation=False):
+
+        if batch_idx == 0: 
+            sampled_loss, _ = self.predict(batch, save_animation=save_animation)
+
+            self.log(f"Test/sampled_loss", sampled_loss)
+
+    def predict(self, batch, save_animation=False):
+
+        batch_1st_half =  dict([(k, v[:8]) for k, v in batch.items()])
+        batch_2nd__half_codec = batch['p_codec'][8:]
+        batch_2nd__half_codec = self.input_normalize(batch_2nd__half_codec)
+        batch_2nd__half_codec = batch_2nd__half_codec.unsqueeze(1)  # (B, 1, T, F)
+
+        noise = torch.randn_like(batch_2nd__half_codec)
+
+        if self.hparams.transfer:
+            sample_steps = int((self.hparams.timesteps - 1) * self.hparams.sample_steps_frac) # steps for noisify the source
+            start_noise = q_sample(x_start=batch_2nd__half_codec,
+                                t=torch.tensor([sample_steps] * 8),
+                                sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
+                                sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
+                                noise=noise)
+        else:
+            start_noise = None
+            sample_steps = self.hparams.timesteps - 1     # always denoise full steps when not tranferring
+        
+        noise_list = self.p_sample(batch_1st_half, start_noise=start_noise, sample_steps=sample_steps)
+
+        # noise_list: [(pred_t, t), ..., (pred_0, 0)]
+        pcodec_pred, _ = noise_list[-1] # (B, 1, T, F)        
+        pcodec_label = batch_1st_half['p_codec'].unsqueeze(1).cpu()
+
+        N = len(batch_1st_half['score_path']) # batchsize=8
+        save_root = f'{self.hparams.samples_root}/{self.logger._name}/epoch={self.current_epoch}'
+        os.makedirs(save_root, exist_ok=True)
+
+        # save the prediction samples (of one batch) and render. 
+        np.save(f'{save_root}/test_sample.npy', pcodec_pred)
+
+        if save_animation:
+            t_list = torch.arange(1, self.hparams.timesteps, 20).flip(0)
+            if t_list[-1] != self.hparams.timesteps:
+                t_list = torch.cat((t_list, torch.tensor([self.hparams.timesteps])), 0)
+            fig, axes = plt.subplots(2 * N, 1, figsize=(24, 4 * N))
+
+            ax_flat = axes.flatten()
+            caxs = []
+            for ax in axes.flatten():
+                div = make_axes_locatable(ax)
+                caxs.append(div.append_axes('right', '5%', '5%'))
+
+            ani = animation.FuncAnimation(fig,
+                                        animate_sampling,
+                                        frames=tqdm(t_list, desc='Animating'),
+                                        fargs=(fig, ax_flat, caxs, noise_list, self.hparams.timesteps),                                          
+                                        interval=500,                                          
+                                        blit=False,
+                                        repeat_delay=1000)
+            ani.save(f'{save_root}/animation.gif', dpi=80, writer='imagemagick')
+
+        # plot the comparison between prediction and label 
+        fig, ax = plt.subplots(2 * N, 1, figsize=(24, 4 * N))
+        for idx, (pred, label) in enumerate(zip(pcodec_pred, pcodec_label)):
+            plot_codec(pred, label, ax[idx*2], ax[idx*2+1], fig)
+        self.logger.log_image(key=f"Val/pred_label", images=[fig])
+        plt.savefig(f"{save_root}/pred_label.png")
+
+        performed_part, fig = render_sample(pcodec_pred, batch_1st_half, 
+                                            f"{save_root}")
+        
+        plt.savefig(f"{save_root}/tempo_curves.png")
+
+        sampled_loss = self.p_losses(pcodec_label, torch.tensor(pcodec_pred), loss_type='l2')
+
+        return sampled_loss, fig
+        
+        
+    def step(self, batch):
+        p_codec, s_codec = batch['p_codec'], batch['s_codec']
+        batch_size = p_codec.shape[0]
+        device = p_codec.device
+
+        p_codec = self.input_normalize(p_codec)
+        p_codec = p_codec.unsqueeze(1)  # (B, 1, T, F)
+
+        # Algorithm 1 line 3: sample t uniformally for every example in the batch
+        ## sampling the same t within each batch, might not work well
+        # t = torch.randint(0, self.hparams.timesteps, (1,), device=device)[0].long() # [0] to remove dimension
+        # t_tensor = t.repeat(batch_size).to(roll.device)
+        
+        t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long() # more diverse sampling
+        
+        noise = torch.randn_like(p_codec) # creating label noise
+        
+        x_t = q_sample( # sampling noise at time t
+            x_start=p_codec,
+            t=t,
+            sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
+            sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
+            noise=noise)
+        
+        # train to predict the noise, loss is computed for the noise
+        if self.hparams.training.mode == 'epsilon':
+            epsilon_pred, _ = self(x_t, s_codec, t) # predict the noise N(0, 1)
+            diffusion_loss = self.p_losses(noise, epsilon_pred, loss_type=self.hparams.loss_type)
+
+            pred_p_codec = extract_x0(
+                x_t,
+                epsilon_pred,
+                t,
+                sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
+                sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod)
+            
+        # train to predict p_codec
+        elif self.hparams.training.mode == 'x_0':
+            pred_p_codec, _ = self(x_t, s_codec, t) 
+            diffusion_loss = self.p_losses(p_codec, pred_p_codec, loss_type=self.hparams.loss_type)
+            
+        elif self.hparams.training.mode == 'ex_0':
+            epsilon_pred, spec = self(x_t, s_codec, t) # predict the noise N(0, 1)
+            pred_roll = extract_x0(
+                x_t,
+                epsilon_pred,
+                t,
+                sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
+                sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod)            
+            diffusion_loss = self.p_losses(p_codec, pred_p_codec, loss_type=self.hparams.loss_type)   
+            
+        else:
+            raise ValueError(f"training mode {self.training.mode} is not supported. Please either use 'x_0' or 'epsilon'.")
+                   
+        tensors = {
+            "pred_pcodec": pred_p_codec,
+            "label_pcodec": p_codec
+        }
+        losses = {
+            "diffusion_loss": diffusion_loss,
+        }                   
+        
+        return losses, tensors
+    
+    def p_sample(self, batch, start_noise=None, sample_steps=None):
+
+        p_codec = batch['p_codec'].unsqueeze(1) 
+        s_codec = batch['s_codec']
+
+        # Algorithm 1 line 3: sample t uniformally for every example in the batch
+        
+        self.inner_loop.refresh()
+        self.inner_loop.reset()
+        
+        if type(start_noise) != type(None):
+            noise = start_noise
+        else:
+            noise = torch.randn_like(p_codec)
+
+        noise_list = []
+        noise_list.append((noise, self.hparams.timesteps))
+
+        if type(sample_steps) == type(None):
+            sample_steps = self.hparams.timesteps
+        for t_index in reversed(range(0, sample_steps)):
+            noise, _ = self.reverse_diffusion(noise, s_codec, t_index) # cfdg_ddpm_x0
+            noise_npy = noise.detach().cpu().numpy()
+                    # self.hparams.timesteps-i is used because slide bar won't show
+                    # if global step starts from self.hparams.timesteps
+            noise_list.append((noise_npy, t_index))                       
+            self.inner_loop.update()
+        
+        return noise_list
+        
+    def p_losses(self, label, prediction, loss_type="l1"):
+        if loss_type == 'l1':
+            loss = F.l1_loss(label, prediction)
+        elif loss_type == 'l2':
+            loss = F.mse_loss(label, prediction)
+        elif loss_type == "huber":
+            loss = F.smooth_l1_loss(label, prediction)
+        else:
+            raise NotImplementedError()
+
+        return loss
+    
+    def ddpm(self, x, waveform, t_index):
+        # x is Guassian noise
+        
+        # extracting coefficients at time t
+        betas_t = self.betas[t_index]
+        sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t_index]
+        sqrt_recip_alphas_t = self.sqrt_recip_alphas[t_index]
+
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        epsilon, spec = self(x, waveform, t_tensor)
+        
+        model_mean = sqrt_recip_alphas_t * (
+            x - betas_t * epsilon / sqrt_one_minus_alphas_cumprod_t
+        )
+        if t_index == 0:
+            return model_mean, spec
+        else:
+            # posterior_variance_t = extract(self.posterior_variance, t, x.shape)
+            posterior_variance_t = self.posterior_variance[t_index]
+            noise = torch.randn_like(x)
+            # Algorithm 2 line 4:
+            return (model_mean + torch.sqrt(posterior_variance_t) * noise), spec
+        
+    def ddpm_x0(self, x, waveform, t_index):
+        # x is x_t, when t=T it is pure Gaussian
+        
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        x0_pred, spec = self(x, waveform, t_tensor)
+
+        if t_index == 0:
+            sigma = (1/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1-self.alphas[t_index]))            
+            model_mean = x0_pred / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            sigma = (self.sqrt_one_minus_alphas_cumprod[t_index-1]/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1-self.alphas[t_index]))                    
+            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * x0_pred + (
+                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index-1]**2 - sigma**2) * (
+                    x-self.sqrt_alphas_cumprod[t_index]* x0_pred)/self.sqrt_one_minus_alphas_cumprod[t_index]) + (
+                sigma * torch.randn_like(x))
+
+        return model_mean, spec
+    
+    def ddim_x0(self, x, waveform, t_index):
+        # x is x_t, when t=T it is pure Gaussian
+        
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        x0_pred, spec = self(x, waveform, t_tensor)
+
+        if t_index == 0:
+            sigma = 0
+            model_mean = x0_pred / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            sigma = 0                 
+            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * x0_pred + (
+                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index-1]**2 - sigma**2) * (
+                    x-self.sqrt_alphas_cumprod[t_index]* x0_pred)/self.sqrt_one_minus_alphas_cumprod[t_index]) + (
+                sigma * torch.randn_like(x))
+
+        return model_mean, spec               
+        
+    def ddim(self, x, waveform, t_index):
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        epsilon, spec = self(x, waveform, t_tensor)
+        
+        if t_index == 0:
+            model_mean = (x - self.sqrt_one_minus_alphas_cumprod[t_index] * epsilon) / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * (
+                (x - self.sqrt_one_minus_alphas_cumprod[t_index] * epsilon) / self.sqrt_alphas_cumprod[t_index]) + (
+                self.sqrt_one_minus_alphas_cumprod[t_index-1] * epsilon)
+            
+        return model_mean, spec
+
+    def ddim2ddpm(self, x, waveform, t_index):
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        epsilon, spec = self(x, waveform, t_tensor)
+
+        if t_index == 0:   
+            model_mean = (x - self.sqrt_one_minus_alphas_cumprod[t_index] * epsilon) / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            sigma = (self.sqrt_one_minus_alphas_cumprod[t_index-1]/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1-self.alphas[t_index]))                    
+            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * (
+                (x - self.sqrt_one_minus_alphas_cumprod[t_index] * epsilon) / self.sqrt_alphas_cumprod[t_index]) + (
+                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index-1]**2 - sigma**2) * epsilon) + sigma * torch.randn_like(x)
+
+        return model_mean, spec           
+        
+    def cfdg_ddpm(self, x, scodec, t_index):
+        # x is Guassian noise
+        
+        # extracting coefficients at time t
+        betas_t = self.betas[t_index]
+        sqrt_one_minus_alphas_cumprod_t = self.sqrt_one_minus_alphas_cumprod[t_index]
+        sqrt_recip_alphas_t = self.sqrt_recip_alphas[t_index]
+
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        epsilon_c, spec = self(x, scodec, t_tensor)
+        epsilon_0, _ = self(x, torch.zeros_like(scodec), t_tensor)
+        epsilon = self.hparams.sampling.w * epsilon_c + (1 - self.hparams.sampling.w) * epsilon_0
+        
+        model_mean = sqrt_recip_alphas_t * (
+            x - betas_t * epsilon / sqrt_one_minus_alphas_cumprod_t
+        )
+        if t_index == 0:
+            return model_mean, spec
+        else:
+            # posterior_variance_t = extract(self.posterior_variance, t, x.shape)
+            posterior_variance_t = self.posterior_variance[t_index]
+            noise = torch.randn_like(x)
+            # Algorithm 2 line 4:
+            return (model_mean + torch.sqrt(posterior_variance_t) * noise), spec     
+        
+        
+    def cfdg_ddpm_x0(self, x, scodec, t_index):
+        # x is x_t, when t=T it is pure Gaussian
+        
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Algo 1 line 4: Use model (noise predictor) to predict the mean and weight the conditioned & unconditioned
+        x0_pred_c, cond = self(x, scodec, t_tensor)
+        if type(scodec) != type(None):
+            x0_pred_0, _ = self(x, torch.zeros_like(scodec), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
+            # wait... is this really weighting???
+            x0_pred =  self.hparams.sampling.w * x0_pred_c + (1 - self.hparams.sampling.w) * x0_pred_0
+            # x0_pred =  (1 + self.hparams.sampling.w) * x0_pred_c - self.hparams.sampling.w * x0_pred_0
+        else:
+            x0_pred = x0_pred_c
+
+        if t_index == 0:
+            sigma = (1/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1-self.alphas[t_index]))            
+            model_mean = x0_pred / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            # sigma is the noise magnitude (variance to scale noise)
+            sigma = (self.sqrt_one_minus_alphas_cumprod[t_index - 1] / self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1 - self.alphas[t_index]))           
+            model_mean = (self.sqrt_alphas_cumprod[t_index - 1]) * x0_pred + (
+                            torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index - 1] ** 2 - sigma ** 2) * (
+                            x - self.sqrt_alphas_cumprod[t_index] * x0_pred) / self.sqrt_one_minus_alphas_cumprod[t_index]) + (  # epsilon
+                            sigma * torch.randn_like(x))
+
+        return model_mean, cond
+
+    def cfdg_ddim_x0(self, x, waveform, t_index):
+        # x is x_t, when t=T it is pure Gaussian
+        
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        x0_pred_c, spec = self(x, waveform, t_tensor)
+        x0_pred_0, _ = self(x, torch.zeros_like(waveform), t_tensor)
+        x0_pred = (1 + self.hparams.sampling.w) * x0_pred_c - self.hparams.sampling.w * x0_pred_0
+        # x0_pred = x0_pred_c
+        # x0_pred = x0_pred_0
+
+        if t_index == 0:
+            sigma = 0 
+            model_mean = x0_pred / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            sigma = 0          
+            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * x0_pred + (
+                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index - 1] ** 2 - sigma ** 2) * (
+                    x - self.sqrt_alphas_cumprod[t_index] * x0_pred) / self.sqrt_one_minus_alphas_cumprod[t_index]) + (
+                sigma * torch.randn_like(x))
+
+        return model_mean, spec            
+
+    def generation_ddpm_x0(self, x, waveform, t_index):
+        # x is x_t, when t=T it is pure Gaussian
+        
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        x0_pred_0, _ = self(x, torch.zeros_like(waveform), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
+        x0_pred = x0_pred_0
+
+        if t_index == 0:
+            sigma = (1/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1-self.alphas[t_index]))            
+            model_mean = x0_pred / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            sigma = (self.sqrt_one_minus_alphas_cumprod[t_index-1]/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1-self.alphas[t_index]))                    
+            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * x0_pred + (
+                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index-1]**2 - sigma**2) * (
+                    x-self.sqrt_alphas_cumprod[t_index]* x0_pred)/self.sqrt_one_minus_alphas_cumprod[t_index]) + (
+                sigma * torch.randn_like(x))
+
+        return model_mean, _
+    
+    def inpainting_ddpm_x0(self, x, waveform, t_index):
+        # x is x_t, when t=T it is pure Gaussian
+        
+        # boardcasting t_index into a tensor
+        t_tensor = torch.tensor(t_index).repeat(x.shape[0]).to(x.device)
+        
+        # Equation 11 in the paper
+        # Use our model (noise predictor) to predict the mean 
+        x0_pred_c, spec = self(x, waveform, t_tensor, inpainting_t=self.hparams.inpainting_t, inpainting_f=self.hparams.inpainting_f)
+        x0_pred_0, _ = self(x, torch.zeros_like(waveform), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
+        x0_pred = (1+self.hparams.sampling.w)*x0_pred_c - self.hparams.sampling.w*x0_pred_0
+        # x0_pred = x0_pred_c
+        # x0_pred = x0_pred_0
+
+        if t_index == 0:
+            sigma = (1/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1-self.alphas[t_index]))            
+            model_mean = x0_pred / self.sqrt_alphas_cumprod[t_index] 
+        else:
+            sigma = (self.sqrt_one_minus_alphas_cumprod[t_index-1]/self.sqrt_one_minus_alphas_cumprod[t_index]) * (
+                torch.sqrt(1-self.alphas[t_index]))                    
+            model_mean = (self.sqrt_alphas_cumprod[t_index-1]) * x0_pred + (
+                torch.sqrt(1 - self.sqrt_alphas_cumprod[t_index-1]**2 - sigma**2) * (
+                    x-self.sqrt_alphas_cumprod[t_index]* x0_pred)/self.sqrt_one_minus_alphas_cumprod[t_index]) + (
+                sigma * torch.randn_like(x))
+
+        return model_mean, spec
+    
+    def configure_optimizers(self):
+
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+        # scheduler = TriStageLRSchedule(optimizer,
+        #                                [1e-8, self.hparams.lr, 1e-8],
+        #                                [0.2,0.6,0.2],
+        #                                max_update=len(self.train_dataloader.dataloader)*self.trainer.max_epochs)   
+        # scheduler = MultiStepLR(optimizer, [1,3,5,7,9], gamma=0.1, last_epoch=-1, verbose=False)
+
+        # return [optimizer], [{"scheduler":scheduler, "interval": "step"}]
+        return [optimizer]
+
+    def animate_sampling(self, t_idx, fig, ax_flat, caxs, noise_list):
+        # noise_list: Tuple of (x_t, t), (x_t-1, t-1), ... (x_0, 0)
+        # x_t (B, 1, T, F)
+        # clearing figures to prevent slow down in each iteration.d
+        fig.canvas.draw()
+        for idx in range(len(noise_list[0][0])): # visualize only 4 piano rolls in a batch
+            ax_flat[idx].cla()
+            ax_flat[4+idx].cla()
+            caxs[idx].cla()
+            caxs[4+idx].cla()     
+
+            # roll_pred (1, T, F)
+            im1 = ax_flat[idx].imshow(noise_list[0][0][idx][0].detach().T.cpu(), aspect='auto', origin='lower')
+            im2 = ax_flat[4+idx].imshow(noise_list[1 + self.hparams.timesteps - t_idx][0][idx][0].T, aspect='auto', origin='lower')
+            fig.colorbar(im1, cax=caxs[idx])
+            fig.colorbar(im2, cax=caxs[4+idx])
+
+        fig.suptitle(f't={t_idx}')
+        row1_txt = ax_flat[0].text(-400,45,f'Gaussian N(0,1)')
+        row2_txt = ax_flat[4].text(-300,45,'x_{t-1}')       
+
+      

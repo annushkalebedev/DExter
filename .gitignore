@@ -1,0 +1,17 @@
+__pycache__
+.ipynb_checkpoints
+*.pyc
+*.ipynb
+outputs
+maestro-v2.0.0
+weights
+*.tar.gz
+wandb/*
+*.gif
+snote_id.npy
+DiffPerformer/*
+*.log
+tmp*
+hook.py
+data/*
+artifacts/*

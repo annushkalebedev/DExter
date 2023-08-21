@@ -1,4 +1,5 @@
 gpus: 1
+<<<<<<< HEAD
 val_freq: 10
 learning_rate: 1e-6
 epochs: 300
@@ -18,13 +19,35 @@ test:
 dataloader:
     train:
         batch_size: 256
+=======
+val_freq: 200
+learning_rate: 1e-6
+epochs: 1500
+download: False
+load_trained: False
+test_only: False
+pretrained_path: 'artifacts/checkpoint/len300-beta0.02-steps1500-x_0-L15-C512-cfdg_ddpm_x0-w=0-p=0.1-k=3-dia=2-4/1244e-diffusion_loss0.03.ckpt'
+data_root: './data'
+seg_len: 300
+pin_memory: True
+random_seed: 13
+
+
+dataloader:
+    train:
+        batch_size: 32
+>>>>>>> 8fdc74dfcd93085e9616fb31fb53a1d7a02bb4d5
         num_workers: 40
         shuffle: True
         pin_memory: ${pin_memory}
         prefetch_factor: 2
         persistent_workers: True
     val:
+<<<<<<< HEAD
         batch_size: 16
+=======
+        batch_size: 8
+>>>>>>> 8fdc74dfcd93085e9616fb31fb53a1d7a02bb4d5
         num_workers: 4
         shuffle: False
         pin_memory: ${pin_memory}
@@ -54,6 +77,10 @@ modelcheckpoint:
 defaults:
     - model: ClassifierFreeDenoiser
     - task: classifierfree_diffusion
+<<<<<<< HEAD
+=======
+    - dataset: MAESTRO
+>>>>>>> 8fdc74dfcd93085e9616fb31fb53a1d7a02bb4d5
 
 
 hydra:  

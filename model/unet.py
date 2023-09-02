@@ -408,10 +408,7 @@ class SpecConvNextBlockUp(nn.Module):
         h = self.net(h)
         spec_h = self.spec_net(spec_h)
         return h + self.res_conv(x), spec_h    
-<<<<<<< HEAD
   
-=======
->>>>>>> 8fdc74dfcd93085e9616fb31fb53a1d7a02bb4d5
     
 class SpecUnet(CodecDiffusion):
     # Unet conditioned on spectrogram

@@ -5,21 +5,25 @@ from pathlib import Path
 sys.path.insert(0, "../partitura")
 sys.path.insert(0, "../")
 import partitura as pt
+import torch.nn.functional as F
 from scipy.interpolate import interp1d
 import numpy.lib.recfunctions as rfn
 import matplotlib.pyplot as plt
+from scipy.stats import pearsonr
 import numpy as np
 import hook
 
 
-def render_sample(sampled_parameters, batch, save_path):
+def render_sample(sampled_parameters, batch, save_path, with_source=False, save_interpolation=False):
     """
     render the sample to midi file and save 
         sampled_parameters (np.array) : (B, L, 4)
         batch : dictionary
             "score_path" : score_path to load
             "snote_id_path" : snote_id path to load
-        snote_ids (str or list) : list of snote_id or path to load
+        save_path
+        with_source:
+        
     """
     B = len(sampled_parameters) # batch_size
 
@@ -28,8 +32,8 @@ def render_sample(sampled_parameters, batch, save_path):
         performance_array = parameters_to_performance_array(sampled_parameters[idx])
 
         # update the snote_id_path to the new one
-        # snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
-        snote_id_path = batch['snote_id_path'][idx]
+        snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
+        # snote_id_path = batch['snote_id_path'][idx]
         snote_ids = np.load(snote_id_path)
         score = pt.load_musicxml(batch['score_path'][idx], force_note_ids='keep')
         # unfold the score if necessary (mostly for ASAP)
@@ -42,11 +46,41 @@ def render_sample(sampled_parameters, batch, save_path):
         pad_mask = np.full(snote_ids.shape, False)
         performed_part = pt.musicanalysis.decode_performance(score, performance_array[:N], snote_ids=snote_ids, pad_mask=pad_mask)
 
-        # compute the tempo curve of sampled parameters (avg for joint-onsets)
-        beats, (performed_tempo, label_tempo), (performed_vel, label_vel) = compare_performance_curve(
-                                                score, snote_ids, performance_array,
-                                                parameters_to_performance_array(batch['p_codec'][idx].cpu()))
-        
+        pcodec_label = parameters_to_performance_array(batch['p_codec'][idx].cpu())
+
+        if save_interpolation:
+            pcodec_interpolate = torch.lerp(batch['p_codec'][idx].cpu(), batch['p_codec'][idx+B].cpu(), 0.5)
+            pcodec_interpolate = parameters_to_performance_array(pcodec_interpolate)
+            pcodec_source = parameters_to_performance_array(batch['p_codec'][idx+B].cpu())
+            performed_part_interpolate = pt.musicanalysis.decode_performance(score, pcodec_interpolate[:N], snote_ids=snote_ids, pad_mask=pad_mask)
+            performed_part_label = pt.musicanalysis.decode_performance(score, pcodec_label[:N], snote_ids=snote_ids, pad_mask=pad_mask)
+            performed_part_source = pt.musicanalysis.decode_performance(score, pcodec_source[:N], snote_ids=snote_ids, pad_mask=pad_mask)
+            try:
+                pt.save_performance_midi(performed_part_interpolate, f"{save_path}/{idx}_{piece_name}_lerp.mid")
+                pt.save_performance_midi(performed_part_label, f"{save_path}/{idx}_{piece_name}_label.mid")
+                pt.save_performance_midi(performed_part_source, f"{save_path}/{idx}_{piece_name}_source.mid")
+                print("done")
+            except Exception as e:
+                print(e)
+
+        if with_source:
+            # compute the tempo curve of sampled parameters (avg for joint-onsets)
+            beats, performed_tempo, performed_vel, label_tempo, label_vel, source_tempo, source_vel = compare_performance_curve(
+                                                    score, snote_ids, performance_array,
+                                                    pcodec_label, 
+                                                    pcodec_source=pcodec_source)
+        else:
+            beats, performed_tempo, performed_vel, label_tempo, label_vel = compare_performance_curve(
+                                                    score, snote_ids, performance_array,
+                                                    pcodec_label)
+
+
+        tempo_vel_loss = F.l1_loss(torch.tensor(performed_tempo), torch.tensor(label_tempo)) + \
+                                F.l1_loss(torch.tensor(performed_vel), torch.tensor(label_vel)) 
+
+        tempo_vel_cor = pearsonr(performed_tempo, label_tempo)[0] + pearsonr(performed_vel, label_vel)[0]
+
+
         ax.flatten()[idx].plot(beats, performed_tempo, label="performed_tempo")
         ax.flatten()[idx].plot(beats, label_tempo, label="label_tempo")
         ax.flatten()[idx].set_ylim(0, 500)
@@ -54,38 +88,55 @@ def render_sample(sampled_parameters, batch, save_path):
         ax.flatten()[idx+B].plot(beats, performed_vel, label="performed_vel")
         ax.flatten()[idx+B].plot(beats, label_vel, label="label_vel")
 
+        if with_source:
+            ax.flatten()[idx].plot(beats, source_tempo, label="source_tempo")
+            ax.flatten()[idx+B].plot(beats, source_vel, label="source_vel")
+
+        ax.flatten()[idx].legend()
+        ax.flatten()[idx].set_title(f"tempo: {piece_name}")   
+        ax.flatten()[idx+B].legend()
+        ax.flatten()[idx+B].set_title(f"vel: {piece_name}")
+
         try:
             pt.save_performance_midi(performed_part, f"{save_path}/{idx}_{piece_name}.mid")
         except Exception as e:
             print(e)
 
-    return performed_part, fig
+    return performed_part, fig, tempo_vel_loss, tempo_vel_cor
 
 
-def compare_performance_curve(score, snote_ids, pcodec_pred, pcodec_label, visualize=False):
+def compare_performance_curve(score, snote_ids, pcodec_pred, pcodec_label, pcodec_source=None):
     """compute the performance curve (tempo curve \ velocity curve) from given performance array
+        pcodec_original: another parameter curve, coming from the optional starting point of transfer
 
     Returns:
         onset_beats : 
-        (performed_tempo, label_tempo): 
+        performed_tempo
+        label_tempo
+        source_tempo
+        performed_vel
+        label_vel
+        source_vel 
         (performed_vel, label_vel): 
     """
     na = score.note_array()
     na = na[np.in1d(na['id'], snote_ids)]
 
-    joint_pcodec_pred = rfn.merge_arrays([na, pcodec_pred[:len(na)]], flatten = True, usemask = False)
-    onset_beats = np.unique(na['onset_beat'])
-    performed_bp = [joint_pcodec_pred[joint_pcodec_pred['onset_beat'] == ob]['beat_period'].mean() for ob in onset_beats]
-    performed_vel = [joint_pcodec_pred[joint_pcodec_pred['onset_beat'] == ob]['velocity'].mean() for ob in onset_beats]
-    tempo_curve_pred = interp1d(onset_beats, 60 / np.array(performed_bp))
+    pcodecs = [pcodec_pred, pcodec_label]
+    if type(pcodec_source) != type(None):
+        pcodecs.append(pcodec_source)
 
-    joint_pcodec_label = rfn.merge_arrays([na, pcodec_label[:len(na)]], flatten = True, usemask = False)
     onset_beats = np.unique(na['onset_beat'])
-    label_bp = [joint_pcodec_label[joint_pcodec_label['onset_beat'] == ob]['beat_period'].mean() for ob in onset_beats]
-    label_vel = [joint_pcodec_label[joint_pcodec_label['onset_beat'] == ob]['velocity'].mean() for ob in onset_beats]
-    tempo_curve_label = interp1d(onset_beats, 60 / np.array(label_bp))
+    res = [onset_beats]
+    for pcodec in pcodecs:
 
-    return onset_beats, (60 / np.array(performed_bp), 60 / np.array(label_bp)), (np.array(performed_vel), np.array(label_vel))
+        joint_pcodec = rfn.merge_arrays([na, pcodec[:len(na)]], flatten = True, usemask = False)
+        bp = [joint_pcodec[joint_pcodec['onset_beat'] == ob]['beat_period'].mean() for ob in onset_beats]
+        vel = [joint_pcodec[joint_pcodec['onset_beat'] == ob]['velocity'].mean() for ob in onset_beats]
+        tempo_curve_pred = interp1d(onset_beats, 60 / np.array(bp))
+        res.extend([60 / np.array(bp), np.array(vel)])
+
+    return res
 
 
 

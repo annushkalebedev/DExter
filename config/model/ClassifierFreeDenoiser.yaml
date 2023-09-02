@@ -7,19 +7,11 @@ model:
       p_codec_rows: 5
       s_codec_rows: 4
       seg_len: ${seg_len}
-<<<<<<< HEAD
-      residual_layers: 36
-      kernel_size: 3
-      dilation_base: 2
-      dilation_bound: 4
-      cond_dropout: 0.2
-=======
-      residual_layers: 21
+      residual_layers: 12
       kernel_size: 3
       dilation_base: 2
       dilation_bound: 4
       cond_dropout: 0.1
->>>>>>> 8fdc74dfcd93085e9616fb31fb53a1d7a02bb4d5
       norm_args:
       - 0
       - 1

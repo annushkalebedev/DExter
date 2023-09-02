@@ -1,0 +1,36 @@
+program: train.py
+method: bayes
+metric:
+  goal: minimize
+  name: Val/tempo_vel_loss
+parameters:
+  task.beta_end:
+    distribution: uniform
+    max: 0.4
+    min: 0.01
+  task.beta_start:
+    distribution: uniform
+    max: 0.002
+    min: 5e-05
+  model.args.residual_channels:
+    distribution: int_uniform
+    max: 1024
+    min: 256
+  model.args.residual_layers:
+    distribution: int_uniform
+    max: 30
+    min: 4
+  model.args.cond_dropout:
+    distribution: uniform
+    max: 0.6
+    min: 0
+  task.timesteps:
+    distribution: int_uniform
+    max: 2000
+    min: 10
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}

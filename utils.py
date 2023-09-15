@@ -21,8 +21,9 @@ def render_sample(sampled_parameters, batch, save_path, with_source=False, save_
         batch : dictionary
             "score_path" : score_path to load
             "snote_id_path" : snote_id path to load
-        save_path
-        with_source:
+        save_path: root directory to save
+        with_source: whether source is provided 
+        save_interpolation: weather 
         
     """
     B = len(sampled_parameters) # batch_size
@@ -32,8 +33,8 @@ def render_sample(sampled_parameters, batch, save_path, with_source=False, save_
         performance_array = parameters_to_performance_array(sampled_parameters[idx])
 
         # update the snote_id_path to the new one
-        snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
-        # snote_id_path = batch['snote_id_path'][idx]
+        # snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
+        snote_id_path = batch['snote_id_path'][idx]
         snote_ids = np.load(snote_id_path)
         score = pt.load_musicxml(batch['score_path'][idx], force_note_ids='keep')
         # unfold the score if necessary (mostly for ASAP)
@@ -47,11 +48,11 @@ def render_sample(sampled_parameters, batch, save_path, with_source=False, save_
         performed_part = pt.musicanalysis.decode_performance(score, performance_array[:N], snote_ids=snote_ids, pad_mask=pad_mask)
 
         pcodec_label = parameters_to_performance_array(batch['p_codec'][idx].cpu())
+        pcodec_source = parameters_to_performance_array(batch['p_codec'][idx+B].cpu())
 
         if save_interpolation:
             pcodec_interpolate = torch.lerp(batch['p_codec'][idx].cpu(), batch['p_codec'][idx+B].cpu(), 0.5)
             pcodec_interpolate = parameters_to_performance_array(pcodec_interpolate)
-            pcodec_source = parameters_to_performance_array(batch['p_codec'][idx+B].cpu())
             performed_part_interpolate = pt.musicanalysis.decode_performance(score, pcodec_interpolate[:N], snote_ids=snote_ids, pad_mask=pad_mask)
             performed_part_label = pt.musicanalysis.decode_performance(score, pcodec_label[:N], snote_ids=snote_ids, pad_mask=pad_mask)
             performed_part_source = pt.musicanalysis.decode_performance(score, pcodec_source[:N], snote_ids=snote_ids, pad_mask=pad_mask)
@@ -79,7 +80,6 @@ def render_sample(sampled_parameters, batch, save_path, with_source=False, save_
                                 F.l1_loss(torch.tensor(performed_vel), torch.tensor(label_vel)) 
 
         tempo_vel_cor = pearsonr(performed_tempo, label_tempo)[0] + pearsonr(performed_vel, label_vel)[0]
-
 
         ax.flatten()[idx].plot(beats, performed_tempo, label="performed_tempo")
         ax.flatten()[idx].plot(beats, label_tempo, label="label_tempo")

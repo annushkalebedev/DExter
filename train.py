@@ -33,9 +33,14 @@ def main(cfg):
     cfg.data_root = to_absolute_path(cfg.data_root)
     
     # load our data
-    codec_data = np.load(cfg.data_root + f"/codec_N={cfg.seg_len}.npy", allow_pickle=True) # (N_data, 1000, 4)
+    if cfg.dataloader.mixup:
+        codec_data = np.load(cfg.data_root + f"/codec_N={cfg.seg_len}_mixup.npy", allow_pickle=True) # (N_data, 1000, 4)
+    else:
+        codec_data = np.load(cfg.data_root + f"/codec_N={cfg.seg_len}.npy", allow_pickle=True)
     # N = 1000: 23,190 - stats for ATEPP+ASAP+VIENNA
     # N = 300: 68,981
+    # N = 200: 101,947
+    # N = 200_mixup: 1,213,088 (1.2M)
     # N = 100: 200,315 
     
     # pick the specific group into the first batch of validation 

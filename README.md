@@ -17,6 +17,7 @@ To install all dependencies
 ```
 pip install -r requirements.txt
 ```
+Partitura versioning: This project use a slightly modified version of performance codec, and please install [my fork of partitura](https://github.com/anusfoil/partitura/tree/diffperformer_codec) where this branch is dedicated to this project. 
 
 # Dataset and Data processing
 

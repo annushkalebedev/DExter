@@ -76,19 +76,25 @@ def process_dataset_codec(max_note_len, mix_up=False):
 
     prev_s_path, data = None, []
     os.makedirs(f"{BASE_DIR}/snote_ids/N={max_note_len}", exist_ok=True)
-    for dataset in ['ATEPP', 'ASAP', 'VIENNA422']:
+    for dataset in [
+                    'ASAP', 
+                    'VIENNA422',
+                    'ATEPP'
+                    ]:
 
         if dataset == "VIENNA422":
             alignment_paths = glob.glob(os.path.join(VIENNA_MATCH_DIR, "*[!e].match"))
             alignment_paths = sorted(alignment_paths)
             score_paths = [(VIENNA_MUSICXML_DIR + pp.split("/")[-1][:-10] + ".musicxml") for pp in alignment_paths]
             performance_paths = [None] * len(alignment_paths) # don't use the given performance, use the aligned.
+            cep_feat_paths = [("../Dataset/vienna4x22/cep_features/" + pp.split("/")[-1][:-6] + ".csv") for pp in alignment_paths]
         if dataset == "ASAP":
             performance_paths = glob.glob(os.path.join(ASAP_DIR, "**/*[!e].mid"), recursive=True)
             alignment_paths = [(pp[:-4] + "_note_alignments/note_alignment.tsv") for pp in performance_paths]
             score_paths = [os.path.join("/".join(pp.split("/")[:-1]), "xml_score.musicxml") for pp in performance_paths]
+            cep_feat_paths = [pp[:-4] + "_cep_features.csv" for pp in performance_paths]
         if dataset == "ATEPP":
-            alignment_paths = glob.glob(os.path.join(ATEPP_DIR, "**/[!z]*n.csv"), recursive=True)
+            alignment_paths = glob.glob(os.path.join(ATEPP_DIR, "**/[!z]*n.csv"), recursive=True)[:2]
             alignment_paths = sorted(alignment_paths)
             performance_paths = [(aa[:-10] + ".mid") for aa in alignment_paths]
             score_paths = [glob.glob(os.path.join("/".join(pp.split("/")[:-1]), "*.*l"))[0] for idx, pp in enumerate(performance_paths)]
@@ -138,36 +144,41 @@ def process_dataset_codec(max_note_len, mix_up=False):
                     piece_name = p_path.split("/")[-1][:-4] 
                 save_snote_id_path = f"{BASE_DIR}/snote_ids/N={max_note_len}/{dataset}_{piece_name}"
 
-                # placeholder c_codec
-                c_codec = np.full((len(p_codec), 7), 0)
-
                 # encode!
                 if prev_s_path == s_path:
                     p_codec, score, snote_ids, m_score = get_performance_codec(s_path, a_path, p_path, score=score)
                     p_codec = rfn.structured_to_unstructured(p_codec)
 
-                    if os.path.exists(c_path): # actual c codec
+                    # c_codec = np.full((len(p_codec), 7), 0) # placeholder
+                    if os.path.exists(c_path): # c codec
                         cep_feats = pd.read_csv(c_path)
                         c_codec = rfn.structured_to_unstructured(get_cep_codec(cep_feats, m_score))
+                    else:
+                        continue
 
-                    if mix_up and ((dataset == "VIENNA422") or (dataset == 'ATEPP' and "/".join(s_path.split("/")[:-1]) in atepp_overlap_dirs)): # get the mixuped codec with prev performances with the same score
+                    # get the mixuped codec with prev performances with the same score
+                    if mix_up and ((dataset == "VIENNA422") or (dataset == 'ATEPP' and "/".join(s_path.split("/")[:-1]) in atepp_overlap_dirs)): 
                         mixuped_p_codec = [np.mean( np.array([ p_codec, ss_p_codec ]), axis=0 ) for ss_p_codec in same_score_p_codec]
                         same_score_p_codec.append(p_codec)
+                        mixuped_c_codec = [np.mean( np.array([ c_codec, ss_c_codec ]), axis=0 ) for ss_c_codec in same_score_c_codec]
+                        same_score_c_codec.append(c_codec)
+
                 else:
                     p_codec, score, snote_ids, m_score = get_performance_codec(s_path, a_path, p_path)
                     p_codec = rfn.structured_to_unstructured(p_codec)
                     same_score_p_codec, mixuped_p_codec = [], []
-                
+                    same_score_c_codec, mixuped_c_codec = [], []
+
+                    # c_codec = np.full((len(p_codec), 7), 0)  # placeholder
+                    if os.path.exists(c_path): # c codec
+                        cep_feats = pd.read_csv(c_path)
+                        c_codec = rfn.structured_to_unstructured(get_cep_codec(cep_feats, m_score))
+                    else:
+                        print(f"no cep_features for {a_path}")
+                        continue
+
                 sna = score.note_array()
                 sna = sna[np.in1d(sna['id'], snote_ids)]
-
-                # perceptural features
-                if os.path.exists(c_path):
-                    cep_feats = pd.read_csv(c_path)
-                    c_codec = rfn.structured_to_unstructured(get_cep_codec(cep_feats, m_score))
-                else:
-                    c_codec = np.full((len(p_codec), 7), 0)
-                    
                 s_codec = rfn.structured_to_unstructured(
                     sna[['onset_div', 'duration_div', 'pitch', 'voice']])
 
@@ -176,8 +187,7 @@ def process_dataset_codec(max_note_len, mix_up=False):
                     print(f"{a_path} has length issue: p: {len(p_codec)}; s: {len(s_codec)}") 
                     continue
 
-                for i, p_codec in enumerate([p_codec] + mixuped_p_codec):
-                    
+                for i, (p_codec, c_codec) in enumerate(zip(([p_codec] + mixuped_p_codec), ([c_codec] + mixuped_c_codec))): # segmentation
                     if i == 1:
                         piece_name = piece_name + "mu"  # mixuped codec name
 
@@ -211,7 +221,6 @@ def process_dataset_codec(max_note_len, mix_up=False):
                 print(f"Data incomplete for {a_path}")
 
 
-    # print(max([data[i].shape[0] for i in range(22)]))
     if mix_up:
         np.save(f"{BASE_DIR}/codec_N={max_note_len}_mixup.npy", np.stack(data))
     else:
@@ -300,7 +309,7 @@ def codec_data_analysis():
 
 
 
-def plot_codec(data, ax0, ax1, fig):
+def plot_codec(data, ax0, ax1, ax2, fig):
     # plot the p_codec and s_codec, on the given two axes
 
     p_im = ax0.imshow(data["p_codec"].T, aspect='auto', origin='lower')
@@ -314,19 +323,32 @@ def plot_codec(data, ax0, ax1, fig):
     ax1.set_yticklabels(['onset_div', 'duration_div', 'pitch', 'voice'])
     fig.colorbar(s_im, orientation='vertical', ax=ax1)
     
+    c_im = ax2.imshow(data['c_codec'].T, aspect='auto', origin='lower')
+    ax2.set_yticks([0, 1, 2, 3, 4, 5, 6])
+    ax2.set_yticklabels(['melodiousness', 'articulation', 'rhythm_complexity', 
+                         'rhythm_stability', 'dissonance', 'tonal_stability', 'minorness'])
+    fig.colorbar(c_im, orientation='vertical', ax=ax2)
+
     return 
 
 
 def plot_codec_list(codec_list):
 
     n_data = len(codec_list)
-    fig, ax = plt.subplots(2 * n_data, 1, figsize=(24, 4 * n_data))
+    fig, ax = plt.subplots(3 * n_data, 1, figsize=(24, 4 * n_data))
     for idx, data in enumerate(codec_list):
-        plot_codec(data, ax[idx * 2], ax[idx * 2 + 1], fig)
+        plot_codec(data, ax[idx * 3], ax[idx * 3 + 1], ax[idx * 3 + 2], fig)
 
     plt.savefig("tmp.png")
 
     return fig
+
+def match_midlevels():
+    mid_paths = glob.glob("../Datasets/midlevel_2bf74_2/**/*.csv", recursive=True)
+    for mp in mid_paths:
+        newdir = "/".join(mp.split("/")[3:])[:-4]
+        os.system(f"mv {mp} ../Datasets/asap-dataset-alignment/{newdir}_cep_features.csv")
+    return 
 
 
 if __name__ == '__main__':
@@ -339,8 +361,8 @@ if __name__ == '__main__':
     # codec_data_analysis()
 
     # from utils import parameters_to_performance_array
-    # codec_data = np.load(f"{BASE_DIR}/codec_N=300.npy", allow_pickle=True) 
-    # # plot_codec_list(codec_data[-110:-105])
+    codec_data = np.load(f"{BASE_DIR}/codec_N=200_mixup.npy", allow_pickle=True) 
+    plot_codec_list(codec_data[:1])
 
     # for data in codec_data:
     #     if '11579_seg2' in data['snote_id_path']:

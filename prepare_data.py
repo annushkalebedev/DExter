@@ -87,14 +87,14 @@ def process_dataset_codec(max_note_len, mix_up=False):
             alignment_paths = sorted(alignment_paths)
             score_paths = [(VIENNA_MUSICXML_DIR + pp.split("/")[-1][:-10] + ".musicxml") for pp in alignment_paths]
             performance_paths = [None] * len(alignment_paths) # don't use the given performance, use the aligned.
-            cep_feat_paths = [("../Dataset/vienna4x22/cep_features/" + pp.split("/")[-1][:-6] + ".csv") for pp in alignment_paths]
+            cep_feat_paths = [("../Datasets/vienna4x22/cep_features/" + pp.split("/")[-1][:-6] + ".csv") for pp in alignment_paths]
         if dataset == "ASAP":
             performance_paths = glob.glob(os.path.join(ASAP_DIR, "**/*[!e].mid"), recursive=True)
             alignment_paths = [(pp[:-4] + "_note_alignments/note_alignment.tsv") for pp in performance_paths]
             score_paths = [os.path.join("/".join(pp.split("/")[:-1]), "xml_score.musicxml") for pp in performance_paths]
             cep_feat_paths = [pp[:-4] + "_cep_features.csv" for pp in performance_paths]
         if dataset == "ATEPP":
-            alignment_paths = glob.glob(os.path.join(ATEPP_DIR, "**/[!z]*n.csv"), recursive=True)[:2]
+            alignment_paths = glob.glob(os.path.join(ATEPP_DIR, "**/[!z]*n.csv"), recursive=True)
             alignment_paths = sorted(alignment_paths)
             performance_paths = [(aa[:-10] + ".mid") for aa in alignment_paths]
             score_paths = [glob.glob(os.path.join("/".join(pp.split("/")[:-1]), "*.*l"))[0] for idx, pp in enumerate(performance_paths)]
@@ -156,6 +156,9 @@ def process_dataset_codec(max_note_len, mix_up=False):
                     else:
                         continue
 
+                    if 60 / p_codec[:, 0].mean() > 200: # filter tempo
+                        continue
+
                     # get the mixuped codec with prev performances with the same score
                     if mix_up and ((dataset == "VIENNA422") or (dataset == 'ATEPP' and "/".join(s_path.split("/")[:-1]) in atepp_overlap_dirs)): 
                         mixuped_p_codec = [np.mean( np.array([ p_codec, ss_p_codec ]), axis=0 ) for ss_p_codec in same_score_p_codec]
@@ -169,6 +172,9 @@ def process_dataset_codec(max_note_len, mix_up=False):
                     same_score_p_codec, mixuped_p_codec = [], []
                     same_score_c_codec, mixuped_c_codec = [], []
 
+                    if 60 / p_codec[:, 0].mean() > 200: # filter tempo
+                        continue
+
                     # c_codec = np.full((len(p_codec), 7), 0)  # placeholder
                     if os.path.exists(c_path): # c codec
                         cep_feats = pd.read_csv(c_path)
@@ -181,7 +187,6 @@ def process_dataset_codec(max_note_len, mix_up=False):
                 sna = sna[np.in1d(sna['id'], snote_ids)]
                 s_codec = rfn.structured_to_unstructured(
                     sna[['onset_div', 'duration_div', 'pitch', 'voice']])
-
 
                 if not ((len(p_codec) == len(s_codec)) and (len(p_codec) == len(snote_ids))):
                     print(f"{a_path} has length issue: p: {len(p_codec)}; s: {len(s_codec)}") 
@@ -200,6 +205,7 @@ def process_dataset_codec(max_note_len, mix_up=False):
                         if len(seg_p_codec) < max_note_len:
                             seg_p_codec = np.pad(seg_p_codec, ((0, max_note_len - len(seg_p_codec)), (0, 0)), mode='constant', constant_values=0)
                             seg_s_codec = np.pad(seg_s_codec, ((0, max_note_len - len(seg_s_codec)), (0, 0)), mode='constant', constant_values=0)
+                            seg_c_codec = np.pad(seg_c_codec, ((0, max_note_len - len(seg_c_codec)), (0, 0)), mode='constant', constant_values=0)
 
                         if len(seg_snote_ids) == 0:
                             hook()
@@ -208,7 +214,8 @@ def process_dataset_codec(max_note_len, mix_up=False):
                         # save snote_id
                         np.save(seg_id_path, seg_snote_ids) 
 
-                        data.append({"p_codec": seg_p_codec, 
+                        data.append({
+                                    "p_codec": seg_p_codec, 
                                     "s_codec": seg_s_codec,
                                     "c_codec": seg_c_codec,
                                     "snote_id_path": seg_id_path,
@@ -220,9 +227,8 @@ def process_dataset_codec(max_note_len, mix_up=False):
             else:
                 print(f"Data incomplete for {a_path}")
 
-
     if mix_up:
-        np.save(f"{BASE_DIR}/codec_N={max_note_len}_mixup.npy", np.stack(data))
+        np.save(f"{BASE_DIR}/codec_N={max_note_len}_mixup_smoothed.npy", np.stack(data))
     else:
         np.save(f"{BASE_DIR}/codec_N={max_note_len}.npy", np.stack(data))
 
@@ -256,7 +262,7 @@ def get_performance_codec(score_path, alignment_path, performance_path=None, sco
 
     # get the performance encodings
     parameters, snote_ids, pad_mask, m_score = pt.musicanalysis.encode_performance(score, performance, alignment, 
-                                                                        #   tempo_smooth='derivative'
+                                                                          tempo_smooth='derivative'
                                                                           )
 
     return parameters, score, snote_ids, m_score
@@ -268,15 +274,16 @@ def get_cep_codec(cep_feats, m_score):
     """
     c_codec = pd.DataFrame()
     for row in m_score:
-        next_window = cep_feats[cep_feats['frame_start_time'] >= row['p_onset']]
+        next_window = cep_feats[cep_feats['frame_start_time'] <= row['p_onset']]
         if not len(next_window):
             c_codec = c_codec.append(cep_feats.iloc[-1])
         else:
-            c_codec = c_codec.append(next_window.iloc[0])
+            c_codec = c_codec.append(next_window.iloc[-1])
 
     records = c_codec.drop(columns=['frame_start_time']).to_records(index=False)
     c_codec = np.array(records, dtype = records.dtype.descr)
     return c_codec
+
 
 def get_atepp_overlap(): 
     """get the atepp subset with pieces of more than 8+ performances
@@ -304,10 +311,20 @@ def render_sample(score_part, sample_path, snote_ids_path):
 
 def codec_data_analysis():
     # look at the distribution of the bp, velocity...
-    codec_data = np.load(f"./{BASE_DIR}/codec_N=100.npy", allow_pickle=True) # (N_data, 1000, 4)
+    codec_data = np.load(f"{BASE_DIR}/codec_N=200.npy", allow_pickle=True) # (N_data, 1000, 4)
     p_codecs = [cd['p_codec'] for cd in codec_data]
 
+    avg_tempo = [60 / pc[:, 0].mean() for pc in p_codecs]
+    avg_tempo = [a for a in avg_tempo if a <= 500]
+    plt.hist(avg_tempo, bins=100)
+    plt.xlim((0, 500))
+    plt.savefig("tmp.png")
 
+    """
+        - N=200 101,947 pieces of data. 
+        - there are 673 with an avg_tempo > 1000 !! 2k with avg_tempo > 500. 75% of the data are under 200bpm 
+
+    """
 
 def plot_codec(data, ax0, ax1, ax2, fig):
     # plot the p_codec and s_codec, on the given two axes
@@ -361,8 +378,8 @@ if __name__ == '__main__':
     # codec_data_analysis()
 
     # from utils import parameters_to_performance_array
-    codec_data = np.load(f"{BASE_DIR}/codec_N=200_mixup.npy", allow_pickle=True) 
-    plot_codec_list(codec_data[:1])
+    # codec_data = np.load(f"{BASE_DIR}/codec_N=200_mixup.npy", allow_pickle=True) 
+    # plot_codec_list(codec_data[:1])
 
     # for data in codec_data:
     #     if '11579_seg2' in data['snote_id_path']:

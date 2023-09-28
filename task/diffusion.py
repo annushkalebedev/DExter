@@ -16,7 +16,7 @@ HOP_LENGTH = 160
 SAMPLE_RATE = 16000
 
 import partitura as pt
-from utils import animate_sampling, render_sample, Normalization, plot_codec
+from utils import animate_sampling, render_sample, Normalization, plot_codec, compile_condition, p_codec_scale
 
 # from model.utils import Normalization
 def linear_beta_schedule(beta_start, beta_end, timesteps):
@@ -221,8 +221,6 @@ class CodecDiffusion(pl.LightningModule):
         super().__init__()
         
         self.save_hyperparameters()
-
-        self.input_normalize = Normalization(0, 1, 'imagewise')
         
         # define beta schedule (beta is variance)
         self.betas = linear_beta_schedule(beta_start, beta_end, timesteps=timesteps)
@@ -283,15 +281,14 @@ class CodecDiffusion(pl.LightningModule):
     def predict(self, batch, save_animation=False):
 
         batch_1st_half =  dict([(k, v[:8]) for k, v in batch.items()])
-        batch_2nd__half_codec = batch['p_codec'][8:]
-        batch_2nd__half_codec = self.input_normalize(batch_2nd__half_codec)
-        batch_2nd__half_codec = batch_2nd__half_codec.unsqueeze(1)  # (B, 1, T, F)
+        batch_2nd_half_codec = batch['p_codec'][8:]
+        batch_2nd_half_codec = batch_2nd_half_codec.unsqueeze(1)  # (B, 1, T, F)
 
-        noise = torch.randn_like(batch_2nd__half_codec)
+        noise = torch.randn_like(batch_2nd_half_codec)
 
         if self.hparams.transfer:
             sample_steps = int((self.hparams.timesteps - 1) * self.hparams.sample_steps_frac) # steps for noisify the source
-            start_noise = q_sample(x_start=batch_2nd__half_codec,
+            start_noise = q_sample(x_start=batch_2nd_half_codec,
                                 t=torch.tensor([sample_steps] * 8),
                                 sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
                                 sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
@@ -300,7 +297,14 @@ class CodecDiffusion(pl.LightningModule):
             start_noise = None
             sample_steps = self.hparams.timesteps - 1     # always denoise full steps when not tranferring
         
-        noise_list = self.p_sample(batch_1st_half, start_noise=start_noise, sample_steps=sample_steps)
+        # combine the c_codec for the transfer
+        # c_codec = None
+        c_codec = batch['c_codec'][:8] - batch['c_codec'][8:] # label minus source
+        # c_codec = 0.5 * batch['c_codec'][:8] + 0.5 * batch['c_codec'][8:] # average
+
+        noise_list = self.p_sample(batch_1st_half, start_noise=start_noise, 
+                                   sample_steps=sample_steps,
+                                   c_codec=c_codec)
 
         # noise_list: [(pred_t, t), ..., (pred_0, 0)]
         pcodec_pred, _ = noise_list[-1] # (B, 1, T, F)        
@@ -342,7 +346,10 @@ class CodecDiffusion(pl.LightningModule):
         plt.savefig(f"{save_root}/pred_label.png")
 
         performed_part, fig, tempo_vel_loss, tempo_vel_cor = render_sample(pcodec_pred, batch, 
-                                            f"{save_root}", with_source=self.hparams.transfer)
+                                            f"{save_root}", 
+                                            with_source=self.hparams.transfer,
+                                            means=self.hparams.dataset_means,
+                                            stds=self.hparams.dataset_stds)
         
         plt.savefig(f"{save_root}/tempo_curves.png")
 
@@ -352,12 +359,13 @@ class CodecDiffusion(pl.LightningModule):
         
         
     def step(self, batch, batch_idx):
-        p_codec, s_codec = batch['p_codec'], batch['s_codec']
+        p_codec, s_codec, c_codec = batch['p_codec'], batch['s_codec'], batch['c_codec']
         batch_size = p_codec.shape[0]
         device = p_codec.device
 
-        p_codec = self.input_normalize(p_codec)
         p_codec = p_codec.unsqueeze(1)  # (B, 1, T, F)
+
+        condition = compile_condition(s_codec, c_codec)
 
         # Algorithm 1 line 3: sample t uniformally for every example in the batch
         ## sampling the same t within each batch, might not work well
@@ -377,7 +385,7 @@ class CodecDiffusion(pl.LightningModule):
         
         # train to predict the noise, loss is computed for the noise
         if self.hparams.training.mode == 'epsilon':
-            epsilon_pred, _ = self(x_t, s_codec, t) # predict the noise N(0, 1)
+            epsilon_pred, _ = self(x_t, condition, t) # predict the noise N(0, 1)
             diffusion_loss = self.p_losses(noise, epsilon_pred, loss_type=self.hparams.loss_type)
 
             pred_p_codec = extract_x0(
@@ -386,51 +394,53 @@ class CodecDiffusion(pl.LightningModule):
                 t,
                 sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
                 sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod)
-            
+                        
         # train to predict p_codec
         elif self.hparams.training.mode == 'x_0':
-            pred_p_codec, _ = self(x_t, s_codec, t) 
+            pred_p_codec, _ = self(x_t, condition, t) 
+            # pred_p_codec = p_codec_scale(pred_p_codec, self.hparams.dataset_means, self.hparams.dataset_stds)
             diffusion_loss = self.p_losses(p_codec, pred_p_codec, loss_type=self.hparams.loss_type)
             
         elif self.hparams.training.mode == 'ex_0':
-            epsilon_pred, _ = self(x_t, s_codec, t) # predict the noise N(0, 1)
+            epsilon_pred, _ = self(x_t, condition, t) # predict the noise N(0, 1)
             pred_p_codec = extract_x0(
                 x_t,
                 epsilon_pred,
                 t,
                 sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
-                sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod)            
+                sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod) 
             diffusion_loss = self.p_losses(p_codec, pred_p_codec, loss_type=self.hparams.loss_type)   
         else:
             raise ValueError(f"training mode {self.training.mode} is not supported. Please either use 'x_0' or 'epsilon'.")
-                   
+
+        losses = {}       
         # compute tempo_vel_loss for the prediced pcodec, for bp and velocity rows. 
-        if (not torch.any(pred_p_codec.isnan())):
-            tempo_vel_loss = self.p_losses(p_codec[:, :, :, :2], pred_p_codec[:, :, :, :2], loss_type='l2')
-            if torch.any(tempo_vel_loss.isinf()):
-                tempo_vel_loss = torch.tensor(0)
-        else:
-            tempo_vel_loss = torch.tensor(0)
-    
-        assert(~torch.any(diffusion_loss.isnan()))
-        assert(~torch.any(tempo_vel_loss.isnan()))
+        # tempo_vel_loss = self.p_losses(p_codec[:, :, :, :2], pred_p_codec[:, :, :, :2], loss_type='l2') # only tempo and velocity
+        weight_sum = sum(self.hparams.loss_weight)
+        for idx, name in enumerate(['tempo', 'velocity', 'timing', 'duration', 'pedal']):
+            losses[f"recon_{name}_loss"] = (self.p_losses(p_codec[..., idx], pred_p_codec[..., idx], loss_type='l2')
+                                            * self.hparams.loss_weight[idx] / weight_sum * self.hparams.recon_loss_weight)
+
+        losses["diffusion_loss"] = diffusion_loss
 
         tensors = {
             "pred_pcodec": pred_p_codec,
             "label_pcodec": p_codec
-        }
-        losses = {
-            "diffusion_loss": diffusion_loss,
-            "tempo_vel_loss": 0.2 * tempo_vel_loss,
-        }                   
+        }               
         
         return losses, tensors
     
-    def p_sample(self, batch, start_noise=None, sample_steps=None):
+    def p_sample(self, batch, start_noise=None, sample_steps=None, c_codec=None):
 
         p_codec = batch['p_codec'].unsqueeze(1) 
-        s_codec = batch['s_codec']
 
+        if type(c_codec) != type(None):
+            condition = compile_condition( batch['s_codec'], c_codec)
+        else:
+            condition = compile_condition( batch['s_codec'], batch['c_codec'])
+
+
+        print(condition[..., 5:])
         # Algorithm 1 line 3: sample t uniformally for every example in the batch
         
         self.inner_loop.refresh()
@@ -447,7 +457,7 @@ class CodecDiffusion(pl.LightningModule):
         if type(sample_steps) == type(None):
             sample_steps = self.hparams.timesteps
         for t_index in reversed(range(0, sample_steps)):
-            noise, _ = self.reverse_diffusion(noise, s_codec, t_index) # cfdg_ddpm_x0 or cfdg_ddpm
+            noise, _ = self.reverse_diffusion(noise, condition, t_index) # cfdg_ddpm_x0 or cfdg_ddpm
             noise_npy = noise.detach().cpu().numpy()
                     # self.hparams.timesteps-i is used because slide bar won't show
                     # if global step starts from self.hparams.timesteps
@@ -609,7 +619,7 @@ class CodecDiffusion(pl.LightningModule):
             return (model_mean + torch.sqrt(posterior_variance_t) * noise), cond     
         
         
-    def cfdg_ddpm_x0(self, x, scodec, t_index):
+    def cfdg_ddpm_x0(self, x, condition, t_index):
         # x is x_t, when t=T it is pure Gaussian
         
         # boardcasting t_index into a tensor
@@ -617,8 +627,8 @@ class CodecDiffusion(pl.LightningModule):
         
         # Use model (noise & x0 predictor) to predict the mean and weight the conditioned & unconditioned
         if self.hparams.training.mode == "ex_0" or self.hparams.training.mode == "epsilon":
-            epsilon_c, cond = self(x, scodec, t_tensor)
-            epsilon_0, _ = self(x, torch.zeros_like(scodec), t_tensor)
+            epsilon_c, cond = self(x, condition, t_tensor)
+            epsilon_0, _ = self(x, torch.zeros_like(condition), t_tensor)
             epsilon = self.hparams.sampling.w * epsilon_c + (1 - self.hparams.sampling.w) * epsilon_0
             x0_pred = extract_x0(x, 
                                  epsilon, 
@@ -627,8 +637,8 @@ class CodecDiffusion(pl.LightningModule):
                                 sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod)
 
         elif self.hparams.training.mode == "x0": 
-            x0_pred_c, cond = self(x, scodec, t_tensor)
-            x0_pred_0, _ = self(x, torch.zeros_like(scodec), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
+            x0_pred_c, cond = self(x, condition, t_tensor)
+            x0_pred_0, _ = self(x, torch.zeros_like(condition), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
             # wait... is this really weighting???
             # x0_pred =  (1 + self.hparams.sampling.w) * x0_pred_c - self.hparams.sampling.w * x0_pred_0
             x0_pred =  self.hparams.sampling.w * x0_pred_c + (1 - self.hparams.sampling.w) * x0_pred_0

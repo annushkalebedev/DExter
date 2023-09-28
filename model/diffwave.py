@@ -83,7 +83,7 @@ class ResidualBlock(nn.Module):
                  dilation,
                  kernel_size=3,
                  uncond=False,
-                 s_codec_rows=4):
+                 condition_rows=4):
         '''
         :param residual_channels: audio conv
         :param dilation: audio conv dilation
@@ -97,7 +97,7 @@ class ResidualBlock(nn.Module):
                                    dilation=dilation)
         self.diffusion_projection = Linear(512, residual_channels)
         if not uncond: # conditional model
-            self.conditioner_projection = Conv1d(s_codec_rows, 2 * residual_channels, 1)
+            self.conditioner_projection = Conv1d(condition_rows, 2 * residual_channels, 1)
         else: # unconditional model
             self.conditioner_projection = None
 
@@ -179,7 +179,7 @@ class ClassifierFreeDenoiser(CodecDiffusion):
                  unconditional,
                  condition,
                  p_codec_rows,
-                 s_codec_rows,
+                 condition_rows,
                  norm_args,
                  seg_len,
                  residual_layers = 30,
@@ -198,7 +198,7 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         self.diffusion_embedding = DiffusionEmbedding(len(self.betas))
         
         if condition == 'trainable_score':
-            trainable_parameters = torch.full((s_codec_rows, self.hparams.seg_len), -1).float() # TODO: makes it automatic later
+            trainable_parameters = torch.full((condition_rows, self.hparams.seg_len), -1).float() # TODO: makes it automatic later
             
             trainable_parameters = nn.Parameter(trainable_parameters, requires_grad=True)
             self.register_parameter("trainable_parameters", trainable_parameters)
@@ -211,7 +211,7 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         
         # Original dilation for audio was 2**(i % dilation_cycle_length)           
         self.residual_layers = nn.ModuleList([
-            ResidualBlock(residual_channels, dilation_base**(i % dilation_bound), kernel_size, uncond=unconditional, s_codec_rows=s_codec_rows)
+            ResidualBlock(residual_channels, dilation_base**(i % dilation_bound), kernel_size, uncond=unconditional, condition_rows=condition_rows)
             for i in range(residual_layers)
         ])
             
@@ -221,15 +221,15 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         
 
     def forward(self, x_t, condition, diffusion_step, sampling=False):
-        # x_t : (B, 1, T, F)
-        # condition : (B, T, F)
+        # x_t : (B, 1, T, N)
+        # condition : (B, 11, N)
         
         x_t = x_t.squeeze(1).transpose(1, 2) # (B, 4, LEN)
         
         if (condition != None):
             condition = condition.transpose(1, 2).float()
             condition = self.condition_normalize(condition)
-            if self.training: # only use dropout druing training
+            if self.training: # only use dropout during training
                 condition = self.uncon_dropout(condition, self.hparams.cond_dropout) # making some score 0 to be unconditional
                            
             if sampling==True:

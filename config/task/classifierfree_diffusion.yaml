@@ -1,11 +1,19 @@
 task:
+  dataset_means: None
+  dataset_stds: None
   samples_root: 'artifacts/samples'
   lr: ${learning_rate}
   timesteps: 1000
   loss_type: 'l1'
   loss_keys:
       - 'diffusion_loss'
-      - 'tempo_vel_loss'
+      - 'recon_tempo_loss'
+      - 'recon_velocity_loss'
+      - 'recon_timing_loss'
+      - 'recon_duration_loss'
+      - 'recon_pedal_loss'
+  loss_weight: [5, 3, 3, 3, 1]  
+  recon_loss_weight: 0.2   # the weight in comparison to the diffusion loss
   beta_start: 0.0001
   beta_end: 0.2
   training:

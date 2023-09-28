@@ -5,7 +5,7 @@ epochs: 400
 download: False
 load_trained: False
 test_only: False
-pretrained_path: 'artifacts/checkpoint/len200-beta0.2-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C512-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/last.ckpt'
+pretrained_path: 'artifacts/checkpoint/lw11000-len200-beta0.2-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C512-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/339e-tv_loss0.00.ckpt'
 data_root: '/import/c4dm-datasets-ext/DiffPerformer/'
 seg_len: 200
 pin_memory: True
@@ -16,6 +16,7 @@ test:
     transfer: True
 
 dataloader:
+    smoothed: False
     mixup: True
     train:
         batch_size: 512

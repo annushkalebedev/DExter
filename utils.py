@@ -14,7 +14,9 @@ import numpy as np
 import hook
 
 
-def render_sample(sampled_parameters, batch, save_path, with_source=False, save_interpolation=False):
+def render_sample(sampled_parameters, batch, save_path, 
+                  with_source=False, save_interpolation=False,
+                  means=None, stds=None):
     """
     render the sample to midi file and save 
         sampled_parameters (np.array) : (B, L, 4)
@@ -27,6 +29,10 @@ def render_sample(sampled_parameters, batch, save_path, with_source=False, save_
         
     """
     B = len(sampled_parameters) # batch_size
+
+    # rescale the predictions and labels back to normal
+    sampled_parameters = p_codec_scale(sampled_parameters, means, stds)
+    batch['p_codec'] = p_codec_scale(batch['p_codec'], means, stds)
 
     fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 24))
     for idx in range(B): 
@@ -152,22 +158,22 @@ def parameters_to_performance_array(parameters):
 
 
 TESTING_GROUP = [
-    '07403_seg0',  # bethoven appasionata beginning
-    '10696_seg0',  # Jeux D'eau beginning
+    '07935_seg0',  # bethoven appasionata beginning
+    '10713_seg0',  # Jeux D'eau beginning
     '11579_seg3',  # Chopin Ballade 2 transitioning passage
     '00129_seg0',  # Rachmaninov etude tableaux no.5 eb minor
     'ASAP_Schumann_Arabeske_seg0',         # Schumann Arabeske beginning
     'ASAP_Bach_Fugue_bwv_867_seg0',        # Bach fugue 867 beginning 
-    'ASAP_Mozart_Piano_Sonatas_8-1_seg0',  # Mozart a minor beginning
+    'ASAP_Mozart_Piano_Sonatas_12-1_seg0',  # Mozart a minor beginning
     'VIENNA422_Schubert_D783_no15_seg0',   # Vienna422 schubert piece beginning
     #### second group of testing data: paired another performance of the test
-    '07405_seg0',  
-    '10700_seg0', 
-    '11585_seg3',  
+    '07925_seg0',  
+    '10717_seg0', 
+    '11587_seg3',  
     '00130_seg0',  
     'ASAP_Schumann_Arabeske_seg0.',         # select another data example with the same snote_id_path
     'ASAP_Bach_Fugue_bwv_867_seg0.',        
-    'ASAP_Mozart_Piano_Sonatas_8-1_seg0.',  
+    'ASAP_Mozart_Piano_Sonatas_12-1_seg0.',  
     'VIENNA422_Schubert_D783_no15_seg0.',    
 ]
 
@@ -229,6 +235,50 @@ def animate_sampling(t_idx, fig, ax_flat, caxs, noise_list, total_timesteps):
     fig.suptitle(f't={t_idx}')
     row1_txt = ax_flat[0].text(-400,45,f'Gaussian N(0,1)')
     row2_txt = ax_flat[4].text(-300,45,'x_{t-1}')
+
+
+def compile_condition(s_codec, c_codec):
+    """compile s_codec and c_codec into a joint condition 
+
+    Args:
+        s_codec : (B, N, 4)
+        c_codec : (B, N, 7)
+    """
+
+    return torch.cat((s_codec, c_codec), dim=2)
+
+def apply_normalization(cd, mean, std, i):
+    # apply normalization for p codec in codec data
+    cd['p_codec'][:, i] = (cd['p_codec'][:, i] - mean) / std
+
+    return cd
+
+def dataset_normalization(codec_data):
+    """ normalize the p_codec, across the dataset range. 
+        return mean and std for each column. 
+    """
+    dataset_pc = np.vstack([cd['p_codec'] for cd in codec_data])
+
+    means, stds = [], []
+    for i in range(5):
+        mean = dataset_pc[:, i].mean() 
+        std = dataset_pc[:, i].std() 
+        codec_data = list(map(apply_normalization, codec_data, 
+                              [mean] * len(codec_data), 
+                              [std] * len(codec_data),
+                              [i] * len(codec_data)))
+        means.append(float(mean))
+        stds.append(float(std))  # conversion for save into OmegaConf
+
+    return codec_data, means, stds
+
+def p_codec_scale(p_codec, means, stds):
+    # inverse of normalization applied on p_codec 
+    # p_codec: (B, N, 5) or (B, 1, N, 5)
+    for i in range(5):
+        p_codec[..., i] = p_codec[..., i] * stds[i] + means[i]
+
+    return p_codec
 
 
 class Normalization():

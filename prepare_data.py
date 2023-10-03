@@ -138,10 +138,12 @@ def process_dataset_codec(max_note_len, mix_up=False):
                 # path to save the reproducing artifacts
                 if dataset == "VIENNA422":
                     piece_name = s_path.split("/")[-1].split(".")[0]
+                    
                 if dataset == "ASAP":
                     piece_name = "_".join(s_path.split("alignment/")[-1].split("/")[:-1])
                 if dataset == 'ATEPP':
                     piece_name = p_path.split("/")[-1][:-4] 
+                    perf_name = p_path.split("/")[-1][:-4] 
                 save_snote_id_path = f"{BASE_DIR}/snote_ids/N={max_note_len}/{dataset}_{piece_name}"
 
                 # encode!
@@ -194,7 +196,7 @@ def process_dataset_codec(max_note_len, mix_up=False):
 
                 for i, (p_codec, c_codec) in enumerate(zip(([p_codec] + mixuped_p_codec), ([c_codec] + mixuped_c_codec))): # segmentation
                     if i == 1:
-                        piece_name = piece_name + "mu"  # mixuped codec name
+                        piece_name = piece_name + "_mixup"  # mixuped codec name
 
                     for idx in range(0, len(p_codec), max_note_len): # split the piece 
                         seg_p_codec = p_codec[idx : idx + max_note_len]
@@ -220,7 +222,7 @@ def process_dataset_codec(max_note_len, mix_up=False):
                                     "c_codec": seg_c_codec,
                                     "snote_id_path": seg_id_path,
                                     "score_path": s_path,
-                                    "piece_name": piece_name  # piece name for shortcut and identifying the generated sample
+                                    "piece_name": piece_name  # piece name for shortcut and identifying the generated sample. unique for performance not composition
                                     })
 
                 prev_s_path = s_path
@@ -370,15 +372,17 @@ def match_midlevels():
 
 if __name__ == '__main__':
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--MAX_NOTE_LEN', type=int, required=True)
-    args = parser.parse_args()
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument('--MAX_NOTE_LEN', type=int, required=True)
+    # args = parser.parse_args()
 
-    process_dataset_codec(args.MAX_NOTE_LEN, mix_up=True)
+    # process_dataset_codec(args.MAX_NOTE_LEN, mix_up=True)
+    
     # codec_data_analysis()
 
     # from utils import parameters_to_performance_array
-    # codec_data = np.load(f"{BASE_DIR}/codec_N=200_mixup.npy", allow_pickle=True) 
+    codec_data = np.load(f"{BASE_DIR}/codec_N=200_mixup.npy", allow_pickle=True) 
+    make_transfer_pair(codec_data)
     # plot_codec_list(codec_data[:1])
 
     # for data in codec_data:

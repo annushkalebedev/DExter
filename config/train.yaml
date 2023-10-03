@@ -11,6 +11,8 @@ seg_len: 200
 pin_memory: True
 random_seed: 13
 
+train_mode: 'transfer' # 'gen_noise' or 'transfer' or 'gen_noise+transfer' or 'gen_null'
+
 test:
     sample_steps_frac: 0.75
     transfer: True
@@ -26,7 +28,7 @@ dataloader:
         prefetch_factor: 2
         persistent_workers: True
     val:
-        batch_size: 16
+        batch_size: 32
         num_workers: 4
         shuffle: False
         pin_memory: ${pin_memory}

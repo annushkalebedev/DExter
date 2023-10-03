@@ -5,7 +5,8 @@ model:
       unconditional: False
       condition: 'fixed' # either trainable_score or fixed
       p_codec_rows: 5
-      condition_rows: 11
+      s_codec_rows: 4
+      c_codec_rows: 7
       seg_len: ${seg_len}
       residual_layers: 12
       kernel_size: 3

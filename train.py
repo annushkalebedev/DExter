@@ -52,11 +52,20 @@ def main(cfg):
     codec_data, means, stds = dataset_normalization(codec_data)
     cfg.task.dataset_means = means
     cfg.task.dataset_stds = stds
-    
+
+    if cfg.train_mode == "transfer": # load only from paired set. 
+        paired, _ = make_transfer_pair(codec_data, K=50000) 
+        train_set, valid_set = split_train_valid(paired, select=False)
+        train_loader = DataLoader(train_set, **cfg.dataloader.train)
+        val_loader = DataLoader(valid_set, **cfg.dataloader.val)            
+    else: # generation: keep 1000 pairs in validation but use unpaired for training.
+        paired, unpaired = make_transfer_pair(codec_data, K=1000) 
+        train_loader = DataLoader(unpaired, **cfg.dataloader.train)
+        val_loader = DataLoader(paired, **cfg.dataloader.val)    
+
     # pick the specific group into the first batch of validation 
-    train_set, valid_set = split_train_valid(codec_data)
-    train_loader = DataLoader(train_set, **cfg.dataloader.train)
-    val_loader = DataLoader(valid_set, **cfg.dataloader.val)    
+    train_loader = DataLoader(unpaired, **cfg.dataloader.train)
+    val_loader = DataLoader(paired, **cfg.dataloader.val)    
 
     # Model
     if cfg.load_trained:
@@ -82,7 +91,8 @@ def main(cfg):
     wandb_logger = WandbLogger(project="DiffPerformer", name=name, save_code=True)   
     trainer = pl.Trainer(**cfg.trainer,
                          callbacks=[checkpoint_callback,],
-                         logger=wandb_logger
+                         logger=wandb_logger,
+                        #  stochastic_weight_avg=True
                          )
     if not cfg.test_only:
         trainer.fit(model, train_loader, val_loader)

@@ -15,3 +15,4 @@ tmp*
 hook.py
 data/*
 artifacts/*
+model/diffwave_hyon.py

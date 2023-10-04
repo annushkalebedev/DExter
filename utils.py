@@ -16,7 +16,14 @@ from prepare_data import *
 import hook
 
 
-def render_sample(sampled_parameters, batch, save_path, 
+def tensor_pair_swap(x):
+    if type(x) == list:
+        x = np.array(x)
+    # given batched x, swap the pairs 
+    permute_index = torch.arange(x.shape[0]).view(-1, 2)[:, [1, 0]].contiguous().view(-1)
+    return x[permute_index]
+
+def render_sample(sampled_parameters,  batch_source, batch_label, save_path, 
                   with_source=False, save_interpolation=False,
                   means=None, stds=None):
     """
@@ -34,29 +41,29 @@ def render_sample(sampled_parameters, batch, save_path,
 
     # rescale the predictions and labels back to normal
     sampled_parameters = p_codec_scale(sampled_parameters, means, stds)
-    batch['p_codec'] = p_codec_scale(batch['p_codec'], means, stds)
+    batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], means, stds)
 
-    fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 3*B))
+    fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 6*B))
     for idx in range(B): 
         performance_array = parameters_to_performance_array(sampled_parameters[idx])
 
         # update the snote_id_path to the new one
         # snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
-        snote_id_path = batch['snote_id_path'][idx]
+        snote_id_path = batch_source['snote_id_path'][idx]
         snote_ids = np.load(snote_id_path)
-        score = pt.load_musicxml(batch['score_path'][idx], force_note_ids='keep')
+        score = pt.load_musicxml(batch_source['score_path'][idx], force_note_ids='keep')
         # unfold the score if necessary (mostly for ASAP)
         if ("-" in snote_ids[0] and 
             "-" not in score.note_array()['id'][0]):
             score = pt.score.unfold_part_maximal(pt.score.merge_parts(score.parts)) 
-        piece_name = batch['piece_name'][idx]
+        piece_name = batch_source['piece_name'][idx]
         N = len(snote_ids)
         
         pad_mask = np.full(snote_ids.shape, False)
         performed_part = pt.musicanalysis.decode_performance(score, performance_array[:N], snote_ids=snote_ids, pad_mask=pad_mask)
 
-        pcodec_label = parameters_to_performance_array(batch['p_codec'][2*idx].cpu())
-        pcodec_source = parameters_to_performance_array(batch['p_codec'][2*idx+1].cpu())
+        pcodec_label = parameters_to_performance_array(batch_label['p_codec'][idx].cpu())
+        pcodec_source = parameters_to_performance_array(batch_source['p_codec'][idx].cpu())
 
         if save_interpolation:
             pcodec_interpolate = torch.lerp(batch['p_codec'][idx].cpu(), batch['p_codec'][idx+B].cpu(), 0.5)
@@ -150,7 +157,7 @@ def compare_performance_curve(score, snote_ids, pcodec_pred, pcodec_label, pcode
 
 def parameters_to_performance_array(parameters):
     """
-        parameters (np.ndarray) : shape (1000, 5)
+        parameters (np.ndarray) : shape (B, N, 5)
     """
     parameters = list(zip(*parameters.T))
     performance_array = np.array(parameters, 
@@ -184,9 +191,9 @@ def split_train_valid(codec_data, select=True):
     Returns the train set and valid set as list, the first group in the valid set is the selected samples (8 + 8 pair)
     """
 
-    train_idx = int(len(codec_data) * 0.85)
+    train_idx = int(len(codec_data) * 0.8)
     if not select:
-        return codec_data[:train_idx], valid_set[train_idx:]
+        return codec_data[:train_idx], codec_data[train_idx:]
 
     selected_cd, unselected_cd = defaultdict(list), []
     for cd in codec_data:
@@ -232,11 +239,11 @@ def make_transfer_pair(codec_data, K=50000, N=200):
         # if len(transfer_pairs) > K:
         #     break
         seg_id = cd['snote_id_path'].split("seg")[-1].split(".")[0]
-        # find the one that belongs to the same piece, same segment number but not itself
+        # find the one that belongs to the same piece, same segment number, but not itself
         mask = list(map(lambda x: ((
                                     x['score_path'] == cd['score_path']) 
                                    and (f"seg{seg_id}." in x['snote_id_path']) 
-                                   and (x['p_codec'] != cd['p_codec']).all() 
+                                   and (x['p_codec'] != cd['p_codec']).any() 
                                    ), codec_data_))
         same_piece_cd = codec_data_[mask]
         if len(same_piece_cd):
@@ -251,10 +258,8 @@ def make_transfer_pair(codec_data, K=50000, N=200):
     np.random.shuffle(transfer_pairs.T) 
     transfer_pairs = transfer_pairs.ravel(order='F')
     
-    hook()
     np.save(f"{BASE_DIR}/codec_N={N}_mixup_paired_K={K}.npy", transfer_pairs)
     np.save(f"{BASE_DIR}/codec_N={N}_mixup_unpaired_K={K}.npy", unpaired)
-
     
     return transfer_pairs, unpaired
 

@@ -53,8 +53,8 @@ def main(cfg):
     cfg.task.dataset_means = means
     cfg.task.dataset_stds = stds
 
-    if cfg.train_mode == "transfer": # load only from paired set. 
-        paired, _ = make_transfer_pair(codec_data, K=50000) 
+    if cfg.train_target == "transfer": # load only from paired set. 
+        paired, _ = make_transfer_pair(codec_data, K=2374872) 
         train_set, valid_set = split_train_valid(paired, select=False)
         train_loader = DataLoader(train_set, **cfg.dataloader.train)
         val_loader = DataLoader(valid_set, **cfg.dataloader.val)            
@@ -62,10 +62,6 @@ def main(cfg):
         paired, unpaired = make_transfer_pair(codec_data, K=1000) 
         train_loader = DataLoader(unpaired, **cfg.dataloader.train)
         val_loader = DataLoader(paired, **cfg.dataloader.val)    
-
-    # pick the specific group into the first batch of validation 
-    train_loader = DataLoader(unpaired, **cfg.dataloader.train)
-    val_loader = DataLoader(paired, **cfg.dataloader.val)    
 
     # Model
     if cfg.load_trained:
@@ -77,7 +73,7 @@ def main(cfg):
         model = getattr(Model, cfg.model.name)(**cfg.model.args, **cfg.task)
             
     lw = "".join(str(x) for x in cfg.task.loss_weight)
-    name = f"lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
+    name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
             f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
             f"L{cfg.model.args.residual_layers}-C{cfg.model.args.residual_channels}-" + \
             f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" + \

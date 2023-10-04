@@ -16,7 +16,7 @@ HOP_LENGTH = 160
 SAMPLE_RATE = 16000
 
 import partitura as pt
-from utils import animate_sampling, render_sample, Normalization, plot_codec, compile_condition, p_codec_scale
+from utils import animate_sampling, render_sample, plot_codec, p_codec_scale, tensor_pair_swap
 
 # from model.utils import Normalization
 def linear_beta_schedule(beta_start, beta_end, timesteps):
@@ -277,39 +277,41 @@ class CodecDiffusion(pl.LightningModule):
 
     def predict(self, batch, batch_idx, save_animation=False):
 
-        source_idx = np.arange(0, batch['p_codec'].shape[0], 2)
-        label_idx = source_idx + 1
-        batch_label =  dict([(k, np.array(v)[label_idx]) if type(v) == list else (k, v[label_idx]) for k, v in batch.items()])
-        batch_source_codec = batch['p_codec'][source_idx]
+        batch_source = batch
+        batch_label = dict([(k, tensor_pair_swap(v)) for k, v in batch.items()])
+
+        batch_source_codec = batch_source['p_codec']
         batch_source_codec = batch_source_codec.unsqueeze(1)  # (B, 1, T, F)
 
-        noise = torch.randn_like(batch_source_codec)
+        sample_steps = self.hparams.timesteps - 1 
+        if "transfer" not in self.hparams.training.target:
+            noise = torch.randn_like(batch_source_codec)
+            if self.hparams.transfer: # only transfer in testing
+                sample_steps = int((self.hparams.timesteps - 1) * self.hparams.sample_steps_frac) # steps for noisify the source
+                start_noise = q_sample(x_start=batch_source_codec,
+                                    t=torch.tensor([sample_steps] * int(batch['p_codec'].shape[0])),
+                                    sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
+                                    sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
+                                    noise=noise)
+                # combine the c_codec for the transfer
+                c_codec = None
+                # c_codec = batch['c_codec'][:8] - batch['c_codec'][8:] # label minus source
+                # c_codec = 0.5 * batch['c_codec'][:8] + 0.5 * batch['c_codec'][8:] # average
+            else:
+                start_noise = None
+        else: # transfer in training
+            start_noise = batch_source_codec
+            c_codec = batch_label['c_codec'] - batch_source['c_codec']
 
-        if self.hparams.transfer:
-            sample_steps = int((self.hparams.timesteps - 1) * self.hparams.sample_steps_frac) # steps for noisify the source
-            start_noise = q_sample(x_start=batch_source_codec,
-                                t=torch.tensor([sample_steps] * int(batch['p_codec'].shape[0] / 2)),
-                                sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
-                                sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
-                                noise=noise)
-        else:
-            start_noise = None
-            sample_steps = self.hparams.timesteps - 1     # always denoise full steps when not tranferring
-        
-        # combine the c_codec for the transfer
-        c_codec = None
-        # c_codec = batch['c_codec'][:8] - batch['c_codec'][8:] # label minus source
-        # c_codec = 0.5 * batch['c_codec'][:8] + 0.5 * batch['c_codec'][8:] # average
-
-        noise_list = self.p_sample(batch_label, start_noise=start_noise, 
+        pred_list = self.p_sample(batch_label, start_noise=start_noise, 
                                    sample_steps=sample_steps,
                                    c_codec=c_codec)
 
         # noise_list: [(pred_t, t), ..., (pred_0, 0)]
-        pcodec_pred, _ = noise_list[-1] # (B, 1, T, F)        
-        pcodec_label = batch_label['p_codec'].unsqueeze(1).cpu()
+        pcodec_pred, _ = pred_list[-1] # (B, 1, T, F)        
+        batch_label_codec = batch_label['p_codec'].unsqueeze(1).cpu()
 
-        N = len(batch_label['score_path']) # batchsize=8
+        N = len(batch_label['score_path']) 
         save_root = f'{self.hparams.samples_root}/{self.logger._name}/epoch={self.current_epoch}/batch={batch_idx}'
         os.makedirs(save_root, exist_ok=True)
 
@@ -339,14 +341,14 @@ class CodecDiffusion(pl.LightningModule):
 
         # plot the comparison between prediction and label 
         fig, ax = plt.subplots(2 * N, 1, figsize=(24, 4 * N))
-        for idx, (pred, label) in enumerate(zip(pcodec_pred, pcodec_label)):
+        for idx, (pred, label) in enumerate(zip(pcodec_pred, batch_label_codec)):
             plot_codec(pred, label, ax[idx*2], ax[idx*2+1], fig)
         self.logger.log_image(key=f"Val/pred_label", images=[fig])
         plt.savefig(f"{save_root}/pred_label.png")
 
         tempo_vel_loss, tempo_vel_cor = 0, 0
         if len(pcodec_pred) % 2 != 1:
-            performed_part, fig, tempo_vel_loss, tempo_vel_cor = render_sample(pcodec_pred, batch, 
+            performed_part, fig, tempo_vel_loss, tempo_vel_cor = render_sample(pcodec_pred, batch_source, batch_label, 
                                                 f"{save_root}", 
                                                 with_source=self.hparams.transfer,
                                                 means=self.hparams.dataset_means,
@@ -354,7 +356,7 @@ class CodecDiffusion(pl.LightningModule):
             
             plt.savefig(f"{save_root}/tempo_curves.png")
 
-        sampled_loss = self.p_losses(pcodec_label, torch.tensor(pcodec_pred), loss_type='l2')
+        sampled_loss = self.p_losses(batch_label_codec, torch.tensor(pcodec_pred), loss_type='l2')
 
         return sampled_loss, fig, tempo_vel_loss, tempo_vel_cor
         
@@ -366,15 +368,14 @@ class CodecDiffusion(pl.LightningModule):
 
         p_codec = p_codec.unsqueeze(1)  # (B, 1, T, F)
 
-        # Algorithm 1 line 3: sample t uniformally for every example in the batch
-        ## sampling the same t within each batch, might not work well
-        # t = torch.randint(0, self.hparams.timesteps, (1,), device=device)[0].long() # [0] to remove dimension
-        # t_tensor = t.repeat(batch_size).to(roll.device)
-        
         t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long() # more diverse sampling
         
         # np_codec = torch.zeros(p_codec) # TODO: null-performance codec
-        noise = torch.randn_like(p_codec) # creating label noise
+        noise = torch.randn_like(p_codec) 
+        if self.hparams.training.target == "transfer": # invert each pair 
+            noise = tensor_pair_swap(p_codec)
+            # in transfer context, c_codec is the difference between the two that's being transfered. 
+            c_codec = tensor_pair_swap(c_codec) - c_codec # (tgt - src)
         
         x_t = q_sample( # sampling noise at time t
             x_start=p_codec,

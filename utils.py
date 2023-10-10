@@ -43,7 +43,7 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
     sampled_parameters = p_codec_scale(sampled_parameters, means, stds)
     batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], means, stds)
 
-    fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 6*B))
+    fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 3*B))
     for idx in range(B): 
         performance_array = parameters_to_performance_array(sampled_parameters[idx])
 
@@ -51,6 +51,8 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
         # snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
         snote_id_path = batch_source['snote_id_path'][idx]
         snote_ids = np.load(snote_id_path)
+        if len(snote_ids) < 10: # when there is too few notes, the rendering would have problems.
+            continue
         score = pt.load_musicxml(batch_source['score_path'][idx], force_note_ids='keep')
         # unfold the score if necessary (mostly for ASAP)
         if ("-" in snote_ids[0] and 
@@ -191,7 +193,8 @@ def split_train_valid(codec_data, select=True):
     Returns the train set and valid set as list, the first group in the valid set is the selected samples (8 + 8 pair)
     """
 
-    train_idx = int(len(codec_data) * 0.8)
+    train_idx = int(len(codec_data) * 0.87)
+    assert (train_idx % 2 == 0)
     if not select:
         return codec_data[:train_idx], codec_data[train_idx:]
 
@@ -211,57 +214,16 @@ def split_train_valid(codec_data, select=True):
 
     return train_set, valid_set
 
-def make_transfer_pair(codec_data, K=50000, N=200):
-    """make transfer pair from the codec data for the testing set. 
-        Transfer data come from real performance (not mix-up combinations), and the pieces used in testing set doesn't go into training. 
-
+def load_transfer_pair(K=50000, N=200):
+    """
         returns:
         - transfer_pairs: list of tuple of codec
         - unpaired: list of single codec
-
-        stats:
-        - in total 21272 pairs can be found. In testing we can use ~1000 pairs (K). rest can go into unpaired for training. For full transfer 
-            training, we use full pairs. ()
     """
-    if os.path.exists(f"{BASE_DIR}/codec_N={N}_mixup_paired_K={K}.npy"):
-        transfer_pairs = np.load(f"{BASE_DIR}/codec_N={N}_mixup_paired_K={K}.npy", allow_pickle=True)
-        unpaired = np.load(f"{BASE_DIR}/codec_N={N}_mixup_unpaired_K={K}.npy", allow_pickle=True)
-        return transfer_pairs, unpaired
-
-    transfer_pairs = []
-
-    codec_data = np.array(codec_data)
-    codec_data_ = codec_data[list(map(lambda x: "mu" not in x['piece_name'], codec_data))] # only consider those not in mixup
-    np.random.shuffle(codec_data_)
-    unpaired = codec_data
-
-    for cd in tqdm(codec_data_):
-        # if len(transfer_pairs) > K:
-        #     break
-        seg_id = cd['snote_id_path'].split("seg")[-1].split(".")[0]
-        # find the one that belongs to the same piece, same segment number, but not itself
-        mask = list(map(lambda x: ((
-                                    x['score_path'] == cd['score_path']) 
-                                   and (f"seg{seg_id}." in x['snote_id_path']) 
-                                   and (x['p_codec'] != cd['p_codec']).any() 
-                                   ), codec_data_))
-        same_piece_cd = codec_data_[mask]
-        if len(same_piece_cd):
-            for scd in same_piece_cd:
-                transfer_pairs.extend([cd, scd])
-            # remove all this piece's segments from unpaired list (mixup as well, to prevent leakage)
-            unpaired = unpaired[list(map(lambda x: x['score_path'] != cd['score_path'], unpaired))]
-
-
-    # shuffle by each pair and recover
-    transfer_pairs = np.array(transfer_pairs).reshape(2, -1, order='F')
-    np.random.shuffle(transfer_pairs.T) 
-    transfer_pairs = transfer_pairs.ravel(order='F')
-    
-    np.save(f"{BASE_DIR}/codec_N={N}_mixup_paired_K={K}.npy", transfer_pairs)
-    np.save(f"{BASE_DIR}/codec_N={N}_mixup_unpaired_K={K}.npy", unpaired)
-    
+    transfer_pairs = np.load(f"{BASE_DIR}/codec_N={N}_mixup_paired_K={K}.npy", allow_pickle=True)
+    unpaired = np.load(f"{BASE_DIR}/codec_N={N}_mixup_unpaired_K={K}.npy", allow_pickle=True)
     return transfer_pairs, unpaired
+
 
 
 def plot_codec(codec1, codec2, ax0, ax1, fig):

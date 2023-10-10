@@ -54,12 +54,12 @@ def main(cfg):
     cfg.task.dataset_stds = stds
 
     if cfg.train_target == "transfer": # load only from paired set. 
-        paired, _ = make_transfer_pair(codec_data, K=2374872) 
+        paired, _ = load_transfer_pair(K=2374872, N=cfg.seg_len) 
         train_set, valid_set = split_train_valid(paired, select=False)
         train_loader = DataLoader(train_set, **cfg.dataloader.train)
         val_loader = DataLoader(valid_set, **cfg.dataloader.val)            
     else: # generation: keep 1000 pairs in validation but use unpaired for training.
-        paired, unpaired = make_transfer_pair(codec_data, K=1000) 
+        paired, unpaired = load_transfer_pair(K=1000, N=cfg.seg_len) 
         train_loader = DataLoader(unpaired, **cfg.dataloader.train)
         val_loader = DataLoader(paired, **cfg.dataloader.val)    
 

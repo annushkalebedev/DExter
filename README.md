@@ -4,9 +4,11 @@
 - [Table of Content](#table-of-content)
 - [Installation](#installation)
 - [Dataset and Data processing](#dataset-and-data-processing)
+  - [Precomputing codec](#precomputing-codec)
+  - [Transfer pairing](#transfer-pairing)
 - [Training](#training)
   - [Supervised training with conditioning](#supervised-training-with-conditioning)
-- [Testing](#testing)
+- [Testing \& inference](#testing--inference)
 
 
 
@@ -27,12 +29,16 @@ Three score-performance aligned datasets are used in this project:
 * ASAP: https://github.com/CPJKU/asap-dataset 
 * VIENNA422: https://github.com/CPJKU/vienna4x22 
 
+## Precomputing codec
+
 The following script converts the scores and performances in the datasets into performance codec ```p_codec``` and score codec ```s_codec```. Output will be saved in ```data/```. Notice that different ```MAX_NOTE_SEQ``` will lead to different truncation of ```snote_ids``` and saved separately. 
 
 ```
-python prepare_data.py --MAX_NOTE_SEQ=100
+python prepare_data.py --compute_codec --MAX_NOTE_SEQ=100 --mixup
 ```
 - ```MAX_NOTE_LEN```: The length of note sequence to split.
+- ```BASE_DIR```: base directory to save the output. The output would be saved as ```BASE_DIR/codec_N={max_note_len}.npy```
+- ```mixup```: whether mixup augmentation is used. Our mixup strategy takes every pair of interpretations and average the p_codec. This roughly scales the amount of data by 10 times. 
 
 For pre-computed codec, please [download](https://drive.google.com/file/d/1o91jYxOMsbXZZvfE7Z_8hM6DJbXixoXb/view?usp=sharing) and unzip. It contains the codec and snote_ids of ```MAX_NOTE_LEN=100, 300, 1000```. 
 
@@ -40,26 +46,43 @@ Before training, put the pre-computed codec in ```data``` under the root folder.
 
 ![plot](doc/codec_visualization.png)
 
+The ```c_codec```, derived from the mid-level perceptual features proposed in [this paper](), captures the perceptual expressiveness of the audio data and can be used for conditioning. The c_codec is precomputed for all audio data for the set we used. 
+
+## Transfer pairing
+
+For transfer training or inference, we need to pair up two performances from the same piece. The computation goes through all precomputed codec and find the ones that belongs to the same composition and same segment, and create pairs. Depending on the number of pairs requested (K), the function return two lists, paired and unpaired data. 
+Note that mixuped interpolation data is of course not included in the pairing as they are not real performances, instead they go into the unpaired list.
+
+```
+python prepare_data.py --pairing  --K=2374872
+```
+- ```K```:  The number of pairs to generate. For the most 2374872 pairs can be found (segment level).  
+- ```BASE_DIR```: base directory to save the output. The output would be two numpy list saved as ```BASE_DIR/codec_N={N}_mixup_paired_K={K}.npy``` and ```BASE_DIR/codec_N={N}_mixup_unpaired_K={K}.npy``` 
+
+
+
+
 
 # Training
 
 ## Supervised training with conditioning
+
 ```
-python train.py gpus=[0] task.timestep=1000
+python train.py gpus=[0] task.timestep=1000 --train_target='gen_noise'
 ```
 
 - `gpus` sets which GPU to use. `gpus=[k]` means `device='cuda:k'`, `gpus=2` means [DistributedDataParallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html) (DDP) is used with two GPUs.
 - `timesteps` set the number of denoising timesteps.
 - For a full list of parameters please refer to `train.yaml` and `task/classifierfree_diffusion.yaml`
+- ```train_target```: 'gen_noise' or 'transfer'. 'gen_noise' works within the diffusion framework and sample ```p_codec``` from N(0, 1). However transfer is a diffusion-like strategy (as the Gaussian distribution assumption is gone) that goes from one interpretation to another conditioned on the perceptual features (inspired from [this paper]()). Note that these two different training features different use of: 1. data: The former can be trained on individual data but the later has to use pair in training. 2. ```c_codec```: In the former c_codec is used as a standalone condition, but in the later the ```c_codec``` is conditioned as the difference between two interpretations (tgt-src), acting as a notch. 
 
 The checkpoints will be output to `artifacts/checkpoint/`
 
 To check the progress, please go to the wandb page. 
 
 
-
-# Testing
-The training script above already includes the testing. (testing is run every 50 epochs of training.)
+# Testing & inference
+The training script above already includes the inference testing. (testing is run every 50 epochs of training.)
 
 First, open `config/train.yaml`, and then specify the weight to use in `pretrained_path`, for example `pretrained_path='artifacts/checkpoint/len300-beta0.02-steps1500-x_0-L15-C512-cfdg_ddpm_x0-w=0-p=0.1-k=3-dia=2-4/1244e-diffusion_loss0.03.ckpt'`. Or you can specify in the command line.
 
@@ -74,7 +97,7 @@ python train.py gpus=[0] test_only=True load_trained=True task.transfer=True tas
 
 During testing, the following will be generated / evaluated: 
 - Sampling the testing set data.
-- Render the samples (first 8 is the subjective test set). Output into `artifacts/samples/`
+- Render the samples. Output into `artifacts/samples/`
 - Animation of the predicted p_codec from noise
 - Tempo curve and velocity curve. If `WANDB_DISALBED=False` this will be uploaded to the wandb workspace. 
 - Comparison between the pred p_codec and label p_codec.

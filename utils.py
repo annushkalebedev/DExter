@@ -19,7 +19,7 @@ import hook
 def tensor_pair_swap(x):
     if type(x) == list:
         x = np.array(x)
-    # given batched x, swap the pairs 
+    # given batched x, swap the pairs from the first dimension
     permute_index = torch.arange(x.shape[0]).view(-1, 2)[:, [1, 0]].contiguous().view(-1)
     return x[permute_index]
 
@@ -42,6 +42,7 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
     # rescale the predictions and labels back to normal
     sampled_parameters = p_codec_scale(sampled_parameters, means, stds)
     batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], means, stds)
+    batch_label['p_codec'] = p_codec_scale(batch_label['p_codec'], means, stds)
 
     fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 3*B))
     for idx in range(B): 
@@ -66,6 +67,8 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
 
         pcodec_label = parameters_to_performance_array(batch_label['p_codec'][idx].cpu())
         pcodec_source = parameters_to_performance_array(batch_source['p_codec'][idx].cpu())
+
+        hook()
 
         if save_interpolation:
             pcodec_interpolate = torch.lerp(batch['p_codec'][idx].cpu(), batch['p_codec'][idx+B].cpu(), 0.5)
@@ -92,7 +95,6 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
                                                     score, snote_ids, performance_array,
                                                     pcodec_label)
 
-
         tempo_vel_loss = F.l1_loss(torch.tensor(performed_tempo), torch.tensor(label_tempo)) + \
                                 F.l1_loss(torch.tensor(performed_vel), torch.tensor(label_vel)) 
 
@@ -100,7 +102,7 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
 
         ax.flatten()[idx].plot(beats, performed_tempo, label="performed_tempo")
         ax.flatten()[idx].plot(beats, label_tempo, label="label_tempo")
-        ax.flatten()[idx].set_ylim(0, 500)
+        ax.flatten()[idx].set_ylim(0, 300)
 
         ax.flatten()[idx+B].plot(beats, performed_vel, label="performed_vel")
         ax.flatten()[idx+B].plot(beats, label_vel, label="label_vel")
@@ -281,10 +283,11 @@ def apply_normalization(cd, mean, std, i):
 
     return cd
 
-def dataset_normalization(codec_data):
+def dataset_normalization(train_set, valid_set):
     """ normalize the p_codec, across the dataset range. 
         return mean and std for each column. 
     """
+    codec_data = np.hstack([train_set, valid_set])
     dataset_pc = np.vstack([cd['p_codec'] for cd in codec_data])
 
     means, stds = [], []
@@ -298,7 +301,7 @@ def dataset_normalization(codec_data):
         means.append(float(mean))
         stds.append(float(std))  # conversion for save into OmegaConf
 
-    return codec_data, means, stds
+    return codec_data[:len(train_set)], codec_data[len(train_set):], means, stds
 
 def p_codec_scale(p_codec, means, stds):
     # inverse of normalization applied on p_codec 

@@ -260,12 +260,15 @@ class CodecDiffusion(pl.LightningModule):
             total_loss += losses[k]
             self.log(f"Val/{k}", losses[k])           
 
-        sampled_loss, fig, tempo_vel_loss, tempo_vel_cor = self.predict(batch, batch_idx, save_animation=save_animation)
-        
-        self.logger.log_image(key=f"Val/tempo_curves", images=[fig])
-        self.log(f"Val/sampled_loss", sampled_loss)
-        self.log(f"Val/tempo_vel_loss", tempo_vel_loss)
-        self.log(f"Val/tempo_vel_cor", tempo_vel_cor)
+        # sample a fraction (1 percent) of the testing set
+        randgen = torch.rand(1)[0]
+        if randgen <= self.hparams.valid_fraction:
+            sampled_loss, fig, tempo_vel_loss, tempo_vel_cor = self.predict(batch, batch_idx, save_animation=save_animation)
+            
+            self.logger.log_image(key=f"Val/tempo_curves", images=[fig])
+            self.log(f"Val/sampled_loss", sampled_loss)
+            self.log(f"Val/tempo_vel_loss", tempo_vel_loss)
+            self.log(f"Val/tempo_vel_cor", tempo_vel_cor)
 
     def test_step(self, batch, batch_idx, save_animation=False):
 
@@ -299,6 +302,7 @@ class CodecDiffusion(pl.LightningModule):
                 # c_codec = 0.5 * batch['c_codec'][:8] + 0.5 * batch['c_codec'][8:] # average
             else:
                 start_noise = None
+
         else: # transfer in training
             start_noise = batch_source_codec
             c_codec = batch_label['c_codec'] - batch_source['c_codec']
@@ -364,7 +368,6 @@ class CodecDiffusion(pl.LightningModule):
     def step(self, batch, batch_idx):
         p_codec, s_codec, c_codec = batch['p_codec'], batch['s_codec'], batch['c_codec']
         batch_size = p_codec.shape[0]
-        assert(batch_size % 2 == 0)
         device = p_codec.device
 
         p_codec = p_codec.unsqueeze(1)  # (B, 1, T, F)

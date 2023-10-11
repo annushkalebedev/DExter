@@ -33,35 +33,27 @@ def main(cfg):
     cfg.data_root = to_absolute_path(cfg.data_root)
     
     # load our data
-    if cfg.dataloader.mixup:
-        if cfg.dataloader.smoothed:
-            codec_data = np.load(cfg.data_root + f"/codec_N={cfg.seg_len}_mixup_smoothed.npy", allow_pickle=True) # (N_data, 1000, 4)
-        else:
-            codec_data = np.load(cfg.data_root + f"/codec_N={cfg.seg_len}_mixup.npy", allow_pickle=True) # (N_data, 1000, 4)
-    else:
-        codec_data = np.load(cfg.data_root + f"/codec_N={cfg.seg_len}.npy", allow_pickle=True)
-    
-    # N = 1000: 23,190 - stats for ATEPP+ASAP+VIENNA
-    # N = 300: 68,981
-    # N = 200: 101,947
-    # N = 200_mixup: 1,213,088 (1.2M)
-    # N = 200_mixup filter (tempo and cep_features): 589,141 
-    # N = 100: 200,315 
-
-    # Normalize data
-    codec_data, means, stds = dataset_normalization(codec_data)
-    cfg.task.dataset_means = means
-    cfg.task.dataset_stds = stds
-
     if cfg.train_target == "transfer": # load only from paired set. 
         paired, _ = load_transfer_pair(K=2374872, N=cfg.seg_len) 
         train_set, valid_set = split_train_valid(paired, select=False)
-        train_loader = DataLoader(train_set, **cfg.dataloader.train)
-        val_loader = DataLoader(valid_set, **cfg.dataloader.val)            
-    else: # generation: keep 1000 pairs in validation but use unpaired for training.
-        paired, unpaired = load_transfer_pair(K=1000, N=cfg.seg_len) 
-        train_loader = DataLoader(unpaired, **cfg.dataloader.train)
-        val_loader = DataLoader(paired, **cfg.dataloader.val)    
+        assert(len(train_set) % 2 == 0)
+        assert(len(valid_set) % 2 == 0)   
+        cfg.dataloader.train.shuffle = False
+    else: # generation: keep 2000 pairs in validation but use unpaired for training.
+        paired, unpaired = load_transfer_pair(K=2000, N=cfg.seg_len) 
+        assert(len(paired) % 2 == 0)  # ~120 batch
+        train_set, valid_set = unpaired, paired
+
+    # Normalize data
+    train_set, valid_set, means, stds = dataset_normalization(train_set, valid_set)
+    cfg.task.dataset_means = means
+    cfg.task.dataset_stds = stds
+
+    train_loader = DataLoader(train_set, **cfg.dataloader.train)
+    val_loader = DataLoader(valid_set, **cfg.dataloader.val) 
+
+    # set the fraction so that around 20 batchs are output for listen.
+    cfg.task.valid_fraction = 20 / len(val_loader)      
 
     # Model
     if cfg.load_trained:

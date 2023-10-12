@@ -1,4 +1,4 @@
-import os, sys, glob
+import os, sys, glob, copy
 import torch
 from collections import defaultdict
 from pathlib import Path
@@ -46,6 +46,10 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
 
     fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 3*B))
     for idx in range(B): 
+
+        if np.isnan(sampled_parameters[idx]).any(): # but why there are nan being sampled?
+            continue 
+        
         performance_array = parameters_to_performance_array(sampled_parameters[idx])
 
         # update the snote_id_path to the new one
@@ -67,8 +71,6 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
 
         pcodec_label = parameters_to_performance_array(batch_label['p_codec'][idx].cpu())
         pcodec_source = parameters_to_performance_array(batch_source['p_codec'][idx].cpu())
-
-        hook()
 
         if save_interpolation:
             pcodec_interpolate = torch.lerp(batch['p_codec'][idx].cpu(), batch['p_codec'][idx+B].cpu(), 0.5)
@@ -111,6 +113,7 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
             ax.flatten()[idx].plot(beats, source_tempo, label="source_tempo")
             ax.flatten()[idx+B].plot(beats, source_vel, label="source_vel")
 
+        hook()
         ax.flatten()[idx].legend()
         ax.flatten()[idx].set_title(f"tempo: {piece_name}")   
         ax.flatten()[idx+B].legend()
@@ -277,11 +280,9 @@ def compile_condition(s_codec, c_codec):
 
     return torch.cat((s_codec, c_codec), dim=2)
 
-def apply_normalization(cd, mean, std, i):
+def apply_normalization(cd, mean, std, i, idx):
     # apply normalization for p codec in codec data
-    cd['p_codec'][:, i] = (cd['p_codec'][:, i] - mean) / std
-
-    return cd
+    return (cd['p_codec'][:, i] - mean) / std
 
 def dataset_normalization(train_set, valid_set):
     """ normalize the p_codec, across the dataset range. 
@@ -289,15 +290,18 @@ def dataset_normalization(train_set, valid_set):
     """
     codec_data = np.hstack([train_set, valid_set])
     dataset_pc = np.vstack([cd['p_codec'] for cd in codec_data])
-
     means, stds = [], []
+    codec_data_ = copy.deepcopy(codec_data)
     for i in range(5):
         mean = dataset_pc[:, i].mean() 
         std = dataset_pc[:, i].std() 
-        codec_data = list(map(apply_normalization, codec_data, 
-                              [mean] * len(codec_data), 
-                              [std] * len(codec_data),
-                              [i] * len(codec_data)))
+        for idx, cd in enumerate(codec_data):
+            codec_data_[idx]['p_codec'][:, i] = apply_normalization(cd, mean, std, i, idx)
+        # codec_data = list(map(apply_normalization, codec_data, 
+        #                       [mean] * len(codec_data), 
+        #                       [std] * len(codec_data),
+        #                       [i] * len(codec_data),
+        #                       list(range(len(codec_data)))))
         means.append(float(mean))
         stds.append(float(std))  # conversion for save into OmegaConf
 

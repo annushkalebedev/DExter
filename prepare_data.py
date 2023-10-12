@@ -430,14 +430,14 @@ if __name__ == '__main__':
     parser.add_argument('--compute_codec', action='store_true')
     parser.add_argument('--pairing', action='store_true')
     parser.add_argument('--MAX_NOTE_LEN', type=int, default=200, required=False)
-    parser.add_argument('--K', type=int, default=50000, required=False)
+    parser.add_argument('--K', type=int, default=2000, required=False)
     args = parser.parse_args()
 
     if args.compute_codec:
         process_dataset_codec(args.MAX_NOTE_LEN, mix_up=True)
     elif args.pairing:
         codec_data = np.load(f"{BASE_DIR}/codec_N={args.MAX_NOTE_LEN}_mixup.npy", allow_pickle=True) 
-        make_transfer_pair(codec_data, K=args.K, N=args.MAX_NOTE_LEN)
+        transfer_pairs, unpaired = make_transfer_pair(codec_data, K=args.K, N=args.MAX_NOTE_LEN)
 
     # codec_data_analysis()
 

@@ -38,7 +38,6 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
         
     """
     B = len(sampled_parameters) 
-
     # rescale the predictions and labels back to normal
     sampled_parameters = p_codec_scale(sampled_parameters, means, stds)
     batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], means, stds)
@@ -113,7 +112,6 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
             ax.flatten()[idx].plot(beats, source_tempo, label="source_tempo")
             ax.flatten()[idx+B].plot(beats, source_vel, label="source_vel")
 
-        hook()
         ax.flatten()[idx].legend()
         ax.flatten()[idx].set_title(f"tempo: {piece_name}")   
         ax.flatten()[idx+B].legend()
@@ -198,7 +196,7 @@ def split_train_valid(codec_data, select=True):
     Returns the train set and valid set as list, the first group in the valid set is the selected samples (8 + 8 pair)
     """
 
-    train_idx = int(len(codec_data) * 0.87)
+    train_idx = int(len(codec_data) * 0.85) - 1
     assert (train_idx % 2 == 0)
     if not select:
         return codec_data[:train_idx], codec_data[train_idx:]
@@ -277,7 +275,6 @@ def compile_condition(s_codec, c_codec):
         s_codec : (B, N, 4)
         c_codec : (B, N, 7)
     """
-
     return torch.cat((s_codec, c_codec), dim=2)
 
 def apply_normalization(cd, mean, std, i, idx):
@@ -297,15 +294,10 @@ def dataset_normalization(train_set, valid_set):
         std = dataset_pc[:, i].std() 
         for idx, cd in enumerate(codec_data):
             codec_data_[idx]['p_codec'][:, i] = apply_normalization(cd, mean, std, i, idx)
-        # codec_data = list(map(apply_normalization, codec_data, 
-        #                       [mean] * len(codec_data), 
-        #                       [std] * len(codec_data),
-        #                       [i] * len(codec_data),
-        #                       list(range(len(codec_data)))))
         means.append(float(mean))
         stds.append(float(std))  # conversion for save into OmegaConf
 
-    return codec_data[:len(train_set)], codec_data[len(train_set):], means, stds
+    return codec_data_[:len(train_set)], codec_data_[len(train_set):], means, stds
 
 def p_codec_scale(p_codec, means, stds):
     # inverse of normalization applied on p_codec 
@@ -354,9 +346,23 @@ class Normalization():
         return self.normalize(x)
 
 
+def render_midi_to_audio(midi_path, output_path=None):
+    """The soundfont we used is the Essential Keys-sofrzando-v9.6 from https://sites.google.com/site/soundfonts4u/ """
+
+    if output_path == None:
+        output_path = midi_path[:-4] + ".wav"
+
+    os.system(f"fluidsynth -ni ../artifacts/Essential-Keys-sforzando-v9.6.sf2 {midi_path} -F {output_path} ")
+    return
+
+
 
 if __name__ == "__main__":
 
-    performed_part = render_sample(score, 'samples/test_sample.npy', "data/snote_id.npy", "samples/label")
+    import random
+    asap_mid = glob.glob("../Datasets/asap-dataset-alignment/**/*.mid", recursive=True)
+    for am in random.choices(asap_mid, k=2):
+        render_midi_to_audio(am, output_path=f"{am[35:-4]}.wav")
+    hook()
 
     pass

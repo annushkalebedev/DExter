@@ -15,7 +15,7 @@ task:
   loss_weight: [1, 1, 1, 1, 1]  
   recon_loss_weight: 0.2   # the weight in comparison to the diffusion loss
   beta_start: 0.0001
-  beta_end: 0.2
+  beta_end: 0.02
   training:
       mode: 'epsilon' # either 'x_0' or epsilon
       target: ${train_target}

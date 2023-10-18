@@ -2,19 +2,13 @@ from tqdm import tqdm
 import hydra
 from hydra.utils import to_absolute_path
 
-from model.unet import Unet
-
 import torch
 from torch.utils.data import DataLoader
-import torch.nn.functional as F
-from torch.optim import Adam
 
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 import model.unet as Model
 
-from AudioLoader.music.amt import MAPS, MAESTRO
 
 @hydra.main(config_path="config", config_name="infer")
 def main(cfg):

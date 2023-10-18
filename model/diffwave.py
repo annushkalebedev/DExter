@@ -248,7 +248,7 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         self.diffusion_embedding = DiffusionEmbedding(len(self.betas))
         
         if condition == 'trainable_score':
-            trainable_parameters = torch.full((s_codec_rows, self.hparams.seg_len), -1).float() # TODO: makes it automatic later
+            trainable_parameters = torch.full((s_codec_rows, self.hparams.seg_len), -1).float() 
             
             trainable_parameters = nn.Parameter(trainable_parameters, requires_grad=True)
             self.register_parameter("trainable_parameters", trainable_parameters)
@@ -259,7 +259,7 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         else:
             raise ValueError("unrecognized condition '{condition}'")
         
-        # Original dilation for audio was 2**(i % dilation_cycle_length)           
+        # Original dilation was 2**(i % dilation_cycle_length)           
         self.residual_layers = nn.ModuleList([
             ResidualBlockwithFilm(residual_channels, dilation_base**(i % dilation_bound), kernel_size, 
                                   uncond=unconditional, condition_rows=s_codec_rows)
@@ -283,23 +283,24 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         """
         
         x_t = x_t.squeeze(1).transpose(1, 2) # (B, 4, LEN)
-        
+
+        s_codec = s_codec.transpose(1, 2).float()
+        s_codec = self.condition_normalize(s_codec)
+        c_codec = self.condition_normalize(c_codec)
+        if self.training: # only use dropout during training
+            s_codec = self.uncon_dropout(s_codec, self.hparams.cond_dropout) # making some score 0 to be unconditional
+            c_codec = self.uncon_dropout(c_codec, self.hparams.cond_dropout) 
+                        
+        if sampling==True:
+            if self.hparams.condition == 'trainable_score':
+                s_codec = self.trainable_parameters
+            elif self.hparams.condition == 'fixed':
+                s_codec = torch.full_like(s_codec, -1)
+
         # Generate FiLM conditions (beta and gamma) by FiLM generator (Linear layer)
         c_codec_flat = torch.flatten(c_codec, start_dim = 1).float()
         film_feat = self.film_layer(c_codec_flat)
 
-        if (s_codec != None):
-            s_codec = s_codec.transpose(1, 2).float()
-            s_codec = self.condition_normalize(s_codec)
-            if self.training: # only use dropout during training
-                s_codec = self.uncon_dropout(s_codec, self.hparams.cond_dropout) # making some score 0 to be unconditional
-                           
-            if sampling==True:
-                if self.hparams.condition == 'trainable_score':
-                    s_codec = self.trainable_parameters
-                elif self.hparams.condition == 'fixed':
-                    s_codec = torch.full_like(s_codec, -1)
-            
         x = self.input_projection(x_t) # (B, 512, LEN)
         x = F.relu(x)
 

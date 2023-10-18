@@ -34,7 +34,7 @@ def main(cfg):
     
     # load our data
     if cfg.train_target == "transfer": # load only from paired set. 
-        paired, _ = load_transfer_pair(K=2374872, N=cfg.seg_len) 
+        paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
         train_set, valid_set = split_train_valid(paired, select=False)
         assert(len(train_set) % 2 == 0)
         assert(len(valid_set) % 2 == 0)   

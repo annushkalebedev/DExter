@@ -55,7 +55,8 @@ def extract_x0(x_t, epsilon, t, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumpr
 
     # obtaining x0 like the one in audioLDM?
     pred_x0 = 1.0 / sqrt_alphas_cumprod_t * x_t - epsilon / sqrt_one_minus_alphas_cumprod_t
-    # pred_x0 = (x_t - sqrt_one_minus_alphas_cumprod_t * epsilon) / sqrt_alphas_cumprod_t # original - should be wrong - but it's the same as the labml??
+    # pred_x0 = (x_t - sqrt_one_minus_alphas_cumprod_t * epsilon) / sqrt_alphas_cumprod_t   # original - should be wrong - but it's the same as the labml??
+
     return torch.clamp(pred_x0, -1.0, 1.0)
 
 
@@ -287,9 +288,9 @@ class CodecDiffusion(pl.LightningModule):
         batch_source_codec = batch_source_codec.unsqueeze(1)  # (B, 1, T, F)
 
         sample_steps = self.hparams.timesteps - 1 
-        if "transfer" not in self.hparams.training.target:
+        if "transfer" not in self.hparams.training.target: # pure noise 
             noise = torch.randn_like(batch_source_codec)
-            if self.hparams.transfer: # only transfer in testing
+            if self.hparams.transfer: # only transfer in inference
                 sample_steps = int((self.hparams.timesteps - 1) * self.hparams.sample_steps_frac) # steps for noisify the source
                 start_noise = q_sample(x_start=batch_source_codec,
                                     t=torch.tensor([sample_steps] * int(batch['p_codec'].shape[0])),
@@ -302,6 +303,7 @@ class CodecDiffusion(pl.LightningModule):
                 # c_codec = 0.5 * batch['c_codec'][:8] + 0.5 * batch['c_codec'][8:] # average
             else:
                 start_noise = None
+                c_codec = None
 
         else: # transfer in training
             start_noise = batch_source_codec
@@ -309,7 +311,7 @@ class CodecDiffusion(pl.LightningModule):
 
         pred_list = self.p_sample(batch_label, start_noise=start_noise, 
                                    sample_steps=sample_steps,
-                                   c_codec=c_codec)
+                                   c_codec=c_codec)  
 
         # noise_list: [(pred_t, t), ..., (pred_0, 0)]
         pcodec_pred, _ = pred_list[-1] # (B, 1, T, F)        
@@ -377,7 +379,7 @@ class CodecDiffusion(pl.LightningModule):
         # np_codec = torch.zeros(p_codec) # TODO: null-performance codec
         noise = torch.randn_like(p_codec) 
         if self.hparams.training.target == "transfer": # invert each pair 
-            noise = tensor_pair_swap(p_codec)
+            noise = tensor_pair_swap(p_codec) - p_codec
             # in transfer context, c_codec is the difference between the two that's being transfered. 
             c_codec = tensor_pair_swap(c_codec) - c_codec # (tgt - src)
         
@@ -392,7 +394,6 @@ class CodecDiffusion(pl.LightningModule):
         if self.hparams.training.mode == 'epsilon':
             epsilon_pred, _ = self(x_t, s_codec, c_codec, t) # predict the noise N(0, 1)
             diffusion_loss = self.p_losses(noise, epsilon_pred, loss_type=self.hparams.loss_type)
-
             pred_p_codec = extract_x0(
                 x_t,
                 epsilon_pred,
@@ -609,7 +610,7 @@ class CodecDiffusion(pl.LightningModule):
         # Equation 11 in the paper
         model_mean = sqrt_recip_alphas_t * (
             x - betas_t * epsilon / sqrt_one_minus_alphas_cumprod_t
-        ) # should be reconstructed x0
+        ) 
 
         if t_index == 0:
             return model_mean, cond

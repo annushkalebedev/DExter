@@ -16,3 +16,6 @@ hook.py
 data/*
 artifacts/*
 model/diffwave_hyon.py
+sweep.yaml
+.gitignore
+.gitlab-ci.yml

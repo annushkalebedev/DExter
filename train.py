@@ -39,6 +39,7 @@ def main(cfg):
         assert(len(train_set) % 2 == 0)
         assert(len(valid_set) % 2 == 0)   
         cfg.dataloader.train.shuffle = False
+        train_set, valid_set = train_set[:120000], valid_set[:15000]
     else: # generation: keep 2000 pairs in validation but use unpaired for training.
         paired, unpaired = load_transfer_pair(K=2000, N=cfg.seg_len) 
         assert(len(paired) % 2 == 0)  # ~120 batch
@@ -85,7 +86,7 @@ def main(cfg):
     if not cfg.test_only:
         trainer.fit(model, train_loader, val_loader)
     
-    trainer.test(model, val_loader)
+    trainer.validate(model, val_loader)
     
 if __name__ == "__main__":
     main()

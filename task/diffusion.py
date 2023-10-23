@@ -254,7 +254,7 @@ class CodecDiffusion(pl.LightningModule):
             
         return total_loss
     
-    def validation_step(self, batch, batch_idx, save_animation=False):
+    def validation_step(self, batch, batch_idx):
         losses, tensors = self.step(batch, batch_idx)
         total_loss = 0
         for k in self.hparams.loss_keys:
@@ -264,22 +264,20 @@ class CodecDiffusion(pl.LightningModule):
         # sample a fraction (1 percent) of the testing set
         randgen = torch.rand(1)[0]
         if randgen <= self.hparams.valid_fraction:
-            sampled_loss, fig, tempo_vel_loss, tempo_vel_cor = self.predict(batch, batch_idx, save_animation=save_animation)
+            sampled_loss, fig, tempo_vel_loss, tempo_vel_cor, _, _, _ = self.predict(batch, batch_idx)
             
             self.logger.log_image(key=f"Val/tempo_curves", images=[fig])
             self.log(f"Val/sampled_loss", sampled_loss)
             self.log(f"Val/tempo_vel_loss", tempo_vel_loss)
             self.log(f"Val/tempo_vel_cor", tempo_vel_cor)
 
-    def test_step(self, batch, batch_idx, save_animation=False):
+    def test_step(self, batch, batch_idx):
+        # evaluation
 
-        sampled_loss, _, tempo_vel_loss, tempo_vel_cor = self.predict(batch, batch_idx, save_animation=save_animation)
+        _, _, _, _, eval_results = self.predict(batch, batch_idx, evaluate=True)
+        
 
-        self.log(f"Test/sampled_loss", sampled_loss, on_step=True, on_epoch=True)
-        self.log(f"Test/tempo_vel_loss", tempo_vel_loss, on_step=True, on_epoch=True)
-        self.log(f"Test/tempo_vel_cor", tempo_vel_cor, on_step=True, on_epoch=True)
-
-    def predict(self, batch, batch_idx, save_animation=False):
+    def predict(self, batch, batch_idx, save_animation=False, evaluate=False):
 
         batch_source = batch
         batch_label = dict([(k, tensor_pair_swap(v)) for k, v in batch.items()])
@@ -354,9 +352,10 @@ class CodecDiffusion(pl.LightningModule):
 
         tempo_vel_loss, tempo_vel_cor = 0, 0
         if len(pcodec_pred) % 2 != 1:
-            performed_part, fig, tempo_vel_loss, tempo_vel_cor = render_sample(pcodec_pred, batch_source, batch_label, 
+            (fig, tempo_vel_loss, tempo_vel_cor, eval_results) = render_sample(pcodec_pred, batch_source, batch_label, 
                                                 f"{save_root}", 
                                                 with_source=self.hparams.transfer,
+                                                evaluate=evaluate,
                                                 means=self.hparams.dataset_means,
                                                 stds=self.hparams.dataset_stds)
             
@@ -364,7 +363,7 @@ class CodecDiffusion(pl.LightningModule):
 
         sampled_loss = self.p_losses(batch_label_codec, torch.tensor(pcodec_pred), loss_type='l2')
 
-        return sampled_loss, fig, tempo_vel_loss, tempo_vel_cor
+        return sampled_loss, fig, tempo_vel_loss, tempo_vel_cor, eval_results
         
         
     def step(self, batch, batch_idx):
@@ -376,10 +375,9 @@ class CodecDiffusion(pl.LightningModule):
 
         t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long() # more diverse sampling
         
-        # np_codec = torch.zeros(p_codec) # TODO: null-performance codec
         noise = torch.randn_like(p_codec) 
         if self.hparams.training.target == "transfer": # invert each pair 
-            noise = tensor_pair_swap(p_codec) - p_codec
+            noise = tensor_pair_swap(p_codec)
             # in transfer context, c_codec is the difference between the two that's being transfered. 
             c_codec = tensor_pair_swap(c_codec) - c_codec # (tgt - src)
         
@@ -618,8 +616,12 @@ class CodecDiffusion(pl.LightningModule):
             # posterior_variance_t = extract(self.posterior_variance, t, x.shape)
             posterior_variance_t = self.posterior_variance[t_index]
             noise = torch.randn_like(x)
-            # Algorithm 2 line 4:
-            return (model_mean + torch.sqrt(posterior_variance_t) * noise), cond     
+            variance = torch.sqrt(posterior_variance_t) * noise
+
+            # From the diffusion-inspired training strategy paper, remove the deviation parameter since noise is deterministic
+            if self.hparams.training.target == "transfer": 
+                return model_mean, cond
+            return (model_mean + variance), cond     
         
         
     def cfdg_ddpm_x0(self, x, condition, t_index):

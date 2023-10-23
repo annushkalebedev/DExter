@@ -23,17 +23,12 @@ dataloader:
     train:
         batch_size: 512
         num_workers: 40
-        shuffle: True     # We don't want to mess up the transfer pairs
+        shuffle: True    
         pin_memory: ${pin_memory}
         prefetch_factor: 2
         persistent_workers: True
     val:
         batch_size: 16
-        num_workers: 4
-        shuffle: False
-        pin_memory: ${pin_memory}
-    test:
-        batch_size: 8
         num_workers: 4
         shuffle: False
         pin_memory: ${pin_memory}

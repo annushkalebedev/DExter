@@ -1,15 +1,16 @@
 import os, sys, glob, copy
 import torch
 from collections import defaultdict
-from pathlib import Path
 sys.path.insert(0, "../partitura")
 sys.path.insert(0, "../")
 import partitura as pt
 import torch.nn.functional as F
 from scipy.interpolate import interp1d
+from scipy.stats import pearsonr, gaussian_kde, entropy
+from scipy.special import kl_div
 import numpy.lib.recfunctions as rfn
 import matplotlib.pyplot as plt
-from scipy.stats import pearsonr
+import seaborn as sns
 import numpy as np
 import pandas as pd
 from prepare_data import *
@@ -24,7 +25,7 @@ def tensor_pair_swap(x):
     return x[permute_index]
 
 def render_sample(sampled_parameters,  batch_source, batch_label, save_path, 
-                  with_source=False, save_interpolation=False,
+                  with_source=False, save_interpolation=False, evaluate=False,
                   means=None, stds=None):
     """
     render the sample to midi file and save 
@@ -44,12 +45,15 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
     batch_label['p_codec'] = p_codec_scale(batch_label['p_codec'], means, stds)
 
     fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 3*B))
+    eval_results = []
     for idx in range(B): 
 
         if np.isnan(sampled_parameters[idx]).any(): # but why there are nan being sampled?
             continue 
         
         performance_array = parameters_to_performance_array(sampled_parameters[idx])
+        pcodec_label = parameters_to_performance_array(batch_label['p_codec'][idx].cpu())
+        pcodec_source = parameters_to_performance_array(batch_source['p_codec'][idx].cpu())
 
         # update the snote_id_path to the new one
         # snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
@@ -67,26 +71,11 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
         
         pad_mask = np.full(snote_ids.shape, False)
         performed_part = pt.musicanalysis.decode_performance(score, performance_array[:N], snote_ids=snote_ids, pad_mask=pad_mask)
+        performed_part_label = pt.musicanalysis.decode_performance(score, pcodec_label[:N], snote_ids=snote_ids, pad_mask=pad_mask)
+        performed_part_source = pt.musicanalysis.decode_performance(score, pcodec_source[:N], snote_ids=snote_ids, pad_mask=pad_mask)
 
-        pcodec_label = parameters_to_performance_array(batch_label['p_codec'][idx].cpu())
-        pcodec_source = parameters_to_performance_array(batch_source['p_codec'][idx].cpu())
-
-        if save_interpolation:
-            pcodec_interpolate = torch.lerp(batch['p_codec'][idx].cpu(), batch['p_codec'][idx+B].cpu(), 0.5)
-            pcodec_interpolate = parameters_to_performance_array(pcodec_interpolate)
-            performed_part_interpolate = pt.musicanalysis.decode_performance(score, pcodec_interpolate[:N], snote_ids=snote_ids, pad_mask=pad_mask)
-            performed_part_label = pt.musicanalysis.decode_performance(score, pcodec_label[:N], snote_ids=snote_ids, pad_mask=pad_mask)
-            performed_part_source = pt.musicanalysis.decode_performance(score, pcodec_source[:N], snote_ids=snote_ids, pad_mask=pad_mask)
-            try:
-                pt.save_performance_midi(performed_part_interpolate, f"{save_path}/{idx}_{piece_name}_lerp.mid")
-                pt.save_performance_midi(performed_part_label, f"{save_path}/{idx}_{piece_name}_label.mid")
-                pt.save_performance_midi(performed_part_source, f"{save_path}/{idx}_{piece_name}_source.mid")
-                print("done")
-            except Exception as e:
-                print(e)
-
+        # compute the tempo curve of sampled parameters (avg for joint-onsets)
         if with_source:
-            # compute the tempo curve of sampled parameters (avg for joint-onsets)
             beats, performed_tempo, performed_vel, label_tempo, label_vel, source_tempo, source_vel = compare_performance_curve(
                                                     score, snote_ids, performance_array,
                                                     pcodec_label, 
@@ -98,8 +87,15 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
 
         tempo_vel_loss = F.l1_loss(torch.tensor(performed_tempo), torch.tensor(label_tempo)) + \
                                 F.l1_loss(torch.tensor(performed_vel), torch.tensor(label_vel)) 
-
         tempo_vel_cor = pearsonr(performed_tempo, label_tempo)[0] + pearsonr(performed_vel, label_vel)[0]
+
+        if evaluate:
+            # provide analysis to the generated performance 
+            alignment = [{'label': "match", "score_id": sid, "performance_id": sid} for sid in snote_ids]
+            eval_res = quantitative_analysis(score, alignment, performed_part, performed_part_label, performed_part_source,
+                                             performed_tempo, label_tempo, source_tempo, performed_vel, label_vel, source_vel)
+            eval_res['features_results'].to_csv(f"{save_path}/{idx}_{piece_name}_eval.csv", ignore_index=True)
+            eval_results.append(eval_res['features_results'])
 
         ax.flatten()[idx].plot(beats, performed_tempo, label="performed_tempo")
         ax.flatten()[idx].plot(beats, label_tempo, label="label_tempo")
@@ -119,10 +115,13 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
 
         try:
             pt.save_performance_midi(performed_part, f"{save_path}/{idx}_{piece_name}.mid")
+            if evaluate:
+                pt.save_performance_midi(performed_part_label, f"{save_path}/{idx}_{piece_name}_label.mid")
+                pt.save_performance_midi(performed_part_source, f"{save_path}/{idx}_{piece_name}_source.mid")
         except Exception as e:
             print(e)
 
-    return performed_part, fig, tempo_vel_loss, tempo_vel_cor
+    return fig, tempo_vel_loss, tempo_vel_cor, eval_results
 
 
 def compare_performance_curve(score, snote_ids, pcodec_pred, pcodec_label, pcodec_source=None):
@@ -159,7 +158,6 @@ def compare_performance_curve(score, snote_ids, pcodec_pred, pcodec_label, pcode
     return res
 
 
-
 def parameters_to_performance_array(parameters):
     """
         parameters (np.ndarray) : shape (B, N, 5)
@@ -169,6 +167,87 @@ def parameters_to_performance_array(parameters):
                         dtype=[("beat_period", "f4"), ("velocity", "f4"), ("timing", "f4"), ("articulation_log", "f4"), ("pedal", "f4")])
 
     return performance_array
+
+
+def quantitative_analysis(score, alignment, performed_part, performed_part_label, performed_part_source,
+                          performed_tempo, label_tempo, source_tempo, performed_vel, label_vel, source_vel):
+    '''
+    For codec attributes:
+        - Tempo and velocity deviation
+        - Tempo and velocity correlation
+    
+    For performance features:
+        - Deviation of each parameter on note level (for articulation: drop the ones with mask?)
+        - Distribution difference of each parameters using KL estimation.
+    '''
+
+    feats_pred, res = pt.musicanalysis.compute_performance_features(score, performed_part, alignment, feature_functions='all')
+    feats_label, res = pt.musicanalysis.compute_performance_features(score, performed_part_label, alignment, feature_functions='all')
+    feats_source, res = pt.musicanalysis.compute_performance_features(score, performed_part_source, alignment, feature_functions='all')
+
+    features_results = {}
+    for feat_name in ['articulation_feature.kor',
+                      'asynchrony_feature.pitch_cor',
+                      'asynchrony_feature.vel_cor',
+                      'asynchrony_feature.delta',
+                    #   'dynamics_feature.agreement',
+                    #   'dynamics_feature.consistency_std',
+                    #   'dynamics_feature.ramp_cor',
+                      'dynamics_feature.tempo_cor',
+                      'pedal_feature.onset_value'
+                      ]:
+        
+        mask = np.full(res['no_kor_mask'].shape, False)
+        if 'kor' in feat_name:
+            mask = res['no_kor_mask']
+        features_results[feat_name] = dev_kl_cor_estimate(feats_pred[feat_name], feats_label[feat_name], feats_source[feat_name],
+                                                        mask=mask)
+
+    features_results["tempo_curve"] = dev_kl_cor_estimate(performed_tempo, label_tempo, source_tempo, mask=np.full(performed_tempo.shape, False))    
+    features_results["vel_curve"] = dev_kl_cor_estimate(performed_vel, label_vel, source_vel, mask=np.full(performed_vel.shape, False))    
+    features_results = pd.DataFrame(features_results)
+
+    return {
+        "feats_pred": feats_pred,
+        "feats_label": feats_label,
+        "feats_source": feats_source,
+        "features_results": features_results
+    }
+
+def dev_kl_cor_estimate(pred_feat, label_feat, source_feat, 
+                        N=300, mask=None):
+    """
+        dev: deviation between the prediction and the target / source we want to compare with.
+        KL: MC estimate KL divergence by convering the features into kde distribution, and sample their pdf
+        cor: correlation between the two compared series
+
+        mask: for the values that we don't want to look at. 
+    """
+    pred_feat, label_feat, source_feat = pred_feat[~mask], label_feat[~mask], source_feat[~mask]
+
+    if len(pred_feat):
+        kde_pred = gaussian_kde(pred_feat)
+        kde_label = gaussian_kde(label_feat)
+        kde_source = gaussian_kde(source_feat)
+
+        pred_points = kde_pred.resample(N) 
+        label_points = kde_label.resample(N) 
+        pl_KL = entropy(kde_pred.pdf(pred_points), kde_label.pdf(pred_points))
+        ps_KL = entropy(kde_pred.pdf(pred_points), kde_source.pdf(pred_points))
+        ls_KL = entropy(kde_label.pdf(label_points), kde_source.pdf(label_points))
+    else:
+        pl_KL, ps_KL, ls_KL = -1, -1, -1                                                                                                                                                                                                                                                                                        
+    
+    return {
+        "label_dev(percent)": np.ma.masked_invalid((pred_feat - label_feat) / label_feat).mean(), # filter out the inf and nan
+        "source_dev(percent)": np.ma.masked_invalid((pred_feat - source_feat) / (source_feat)).mean(),
+        "pred-label(KL)": pl_KL,
+        "pred-source(KL)": ps_KL,
+        "label-source(KL)": ls_KL,
+        "pred-label(cor)": pearsonr(pred_feat, label_feat)[0],
+        "pred-source(cor)": pearsonr(pred_feat, source_feat)[0],
+        "label-source(cor)": pearsonr(label_feat, source_feat)[0],
+    }
 
 
 TESTING_GROUP = [

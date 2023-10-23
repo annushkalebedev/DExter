@@ -1,11 +1,39 @@
-gpus: 1
-checkpoint_path: './outputs/2022-07-21/21-35-36/diffusion_dim=28-channels=1-huber-MAESTRO/version_1/checkpoints/last.ckpt' # will be ignored in train.py
-shape:
-- 640
-- 88
+gpus: [0]
+epochs: 400
+learning_rate: 5e-5
+pretrained_path: 'artifacts/checkpoint/targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C512-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/last.ckpt'
+data_root: '/import/c4dm-datasets-ext/DiffPerformer/'
+seg_len: 200
+pin_memory: True
+random_seed: 13
 
-defaults:
-    - model: Unet
+train_target: 'gen_noise' # 'gen_noise' or 'transfer' or 'gen_noise+transfer' or 'gen_null'
+
+test:
+    sample_steps_frac: 0.75
+    transfer: True
+
+dataloader:
+    smoothed: False
+    mixup: True
+    val:
+        batch_size: 16
+        num_workers: 4
+        shuffle: False
+        pin_memory: ${pin_memory}
+        
         
 trainer:
     gpus: ${gpus}
+    
+
+
+defaults:
+    - model: ClassifierFreeDenoiser
+    - task: classifierfree_diffusion
+
+
+hydra:  
+  output_subdir: null  
+  run:  
+    dir: .

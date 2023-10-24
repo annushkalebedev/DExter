@@ -19,7 +19,26 @@ from pytorch_lightning.loggers import WandbLogger
 from utils import *
 import hook
 
+def eval_renderer(cfg, val_loader):
+    """run the evaluation set on other renderer for comparison
+    """
+    for batch_idx, batch in enumerate(val_loader):
 
+        for idx in range(cfg.dataloader.val.batch_size): 
+
+            snote_id_path = batch['snote_id_path'][idx]
+            snote_ids = np.load(snote_id_path)
+            if len(snote_ids) < 10: # when there is too few notes, the rendering would have problems.
+                continue
+
+            piece_name = batch['piece_name'][idx]
+            
+            mid_out_dir = f"{cfg.task.samples_root}/EVAL-{cfg.renderer}/batch={batch_idx}/"
+            mid_out_path = f"{mid_out_dir}/{idx}_{piece_name}.mid"
+            os.makedirs(mid_out_dir, exist_ok=True)
+            os.system(f"python {cfg.renderer_path} {batch['score_path'][idx]} {mid_out_path} {batch['snote_id_path'][idx]}")
+
+    return 
 
 @hydra.main(config_path="config", config_name="evaluate")
 def main(cfg):
@@ -38,36 +57,43 @@ def main(cfg):
     train_set, valid_set = split_train_valid(paired, select=False)
     assert(len(train_set) % 2 == 0)
     assert(len(valid_set) % 2 == 0)   
-
-    # Normalize data
-    _, valid_set, means, stds = dataset_normalization(train_set, valid_set)
-    cfg.task.dataset_means = means
-    cfg.task.dataset_stds = stds
-
     val_loader = DataLoader(valid_set, **cfg.dataloader.val)  
 
-    # Model
-    model = getattr(Model, cfg.model.name).load_from_checkpoint(
-                                        checkpoint_path=cfg.pretrained_path,\
-                                        **cfg.model.args, 
-                                        **cfg.task)
-            
-    lw = "".join(str(x) for x in cfg.task.loss_weight)
-    name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
-            f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
-            f"L{cfg.model.args.residual_layers}-C{cfg.model.args.residual_channels}-" + \
-            f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" + \
-            f"p={cfg.model.args.cond_dropout}-k={cfg.model.args.kernel_size}-" + \
-            f"dia={cfg.model.args.dilation_base}-{cfg.model.args.dilation_bound}"
 
-    name = "EVAL-" + name
+    if cfg.renderer == "diff":
+        # Normalize data
+        _, valid_set, means, stds = dataset_normalization(train_set, valid_set)
+        cfg.task.dataset_means = means
+        cfg.task.dataset_stds = stds
+        val_loader = DataLoader(valid_set, **cfg.dataloader.val)  
 
-    wandb_logger = WandbLogger(project="DiffPerformer", name=name, save_code=True)   
-    trainer = pl.Trainer(**cfg.trainer,
-                         logger=wandb_logger,
-                         )
+        # Model
+        model = getattr(Model, cfg.model.name).load_from_checkpoint(
+                                            checkpoint_path=cfg.pretrained_path,\
+                                            **cfg.model.args, 
+                                            **cfg.task)
+                
+        lw = "".join(str(x) for x in cfg.task.loss_weight)
+        name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
+                f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
+                f"L{cfg.model.args.residual_layers}-C{cfg.model.args.residual_channels}-" + \
+                f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" + \
+                f"p={cfg.model.args.cond_dropout}-k={cfg.model.args.kernel_size}-" + \
+                f"dia={cfg.model.args.dilation_base}-{cfg.model.args.dilation_bound}"
+
+        name = "EVAL-" + name
+
     
-    trainer.test(model, val_loader)
+        wandb_logger = WandbLogger(project="DiffPerformer", name=name, save_code=True)   
+        trainer = pl.Trainer(**cfg.trainer,
+                            logger=wandb_logger,
+                            )
+        
+        trainer.test(model, val_loader)
+    elif cfg.renderer == "basismixer":
+        eval_renderer(cfg, val_loader)
     
+
+
 if __name__ == "__main__":
     main()

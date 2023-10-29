@@ -1,4 +1,6 @@
 import os, sys
+import warnings
+warnings.filterwarnings("ignore")
 sys.path.insert(0, "../partitura")
 sys.path.insert(0, "../")
 import warnings
@@ -22,6 +24,7 @@ import hook
 def eval_renderer(cfg, val_loader):
     """run the evaluation set on other renderer for comparison
     """
+
     for batch_idx, batch in enumerate(val_loader):
 
         for idx in range(cfg.dataloader.val.batch_size): 
@@ -38,7 +41,12 @@ def eval_renderer(cfg, val_loader):
             os.makedirs(mid_out_dir, exist_ok=True)
             os.system(f"python {cfg.renderer_path} {batch['score_path'][idx]} {mid_out_path} {batch['snote_id_path'][idx]}")
 
+            if os.path.exists(mid_out_path):
+                # generate evaluation file
+                pass
     return 
+
+
 
 @hydra.main(config_path="config", config_name="evaluate")
 def main(cfg):
@@ -54,7 +62,7 @@ def main(cfg):
     
     # load our data
     paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
-    train_set, valid_set = split_train_valid(paired, select=False)
+    train_set, valid_set = split_train_valid(paired, select_num=3000)
     assert(len(train_set) % 2 == 0)
     assert(len(valid_set) % 2 == 0)   
     val_loader = DataLoader(valid_set, **cfg.dataloader.val)  
@@ -65,7 +73,7 @@ def main(cfg):
         _, valid_set, means, stds = dataset_normalization(train_set, valid_set)
         cfg.task.dataset_means = means
         cfg.task.dataset_stds = stds
-        val_loader = DataLoader(valid_set, **cfg.dataloader.val)  
+        val_loader = DataLoader(valid_set[:cfg.dataloader.num_data], **cfg.dataloader.val)  
 
         # Model
         model = getattr(Model, cfg.model.name).load_from_checkpoint(

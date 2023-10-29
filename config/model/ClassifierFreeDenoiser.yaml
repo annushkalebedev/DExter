@@ -1,7 +1,7 @@
 model:
   name: 'ClassifierFreeDenoiser'
   args:
-      residual_channels: 512
+      residual_channels: 768
       unconditional: False
       condition: 'fixed' # either trainable_score or fixed
       p_codec_rows: 5

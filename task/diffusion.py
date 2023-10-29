@@ -273,7 +273,8 @@ class CodecDiffusion(pl.LightningModule):
 
     def test_step(self, batch, batch_idx):
         # evaluation
-
+        if batch_idx < self.hparams.eval_starting_epoch:
+            return
         _, _, _, _, eval_results = self.predict(batch, batch_idx, evaluate=True)
         
 
@@ -286,6 +287,7 @@ class CodecDiffusion(pl.LightningModule):
         batch_source_codec = batch_source_codec.unsqueeze(1)  # (B, 1, T, F)
 
         sample_steps = self.hparams.timesteps - 1 
+        c_codec = None
         if "transfer" not in self.hparams.training.target: # pure noise 
             noise = torch.randn_like(batch_source_codec)
             if self.hparams.transfer: # only transfer in inference
@@ -296,12 +298,11 @@ class CodecDiffusion(pl.LightningModule):
                                     sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
                                     noise=noise)
                 # combine the c_codec for the transfer
-                c_codec = None
                 # c_codec = batch['c_codec'][:8] - batch['c_codec'][8:] # label minus source
                 # c_codec = 0.5 * batch['c_codec'][:8] + 0.5 * batch['c_codec'][8:] # average
+                hook()
             else:
                 start_noise = None
-                c_codec = None
 
         else: # transfer in training
             start_noise = batch_source_codec

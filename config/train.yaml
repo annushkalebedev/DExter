@@ -21,7 +21,7 @@ dataloader:
     smoothed: False
     mixup: True
     train:
-        batch_size: 512
+        batch_size: 256
         num_workers: 40
         shuffle: True    
         pin_memory: ${pin_memory}

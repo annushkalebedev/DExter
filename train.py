@@ -33,17 +33,16 @@ def main(cfg):
     cfg.data_root = to_absolute_path(cfg.data_root)
     
     # load our data
+    paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
     if cfg.train_target == "transfer": # load only from paired set. 
-        paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
-        train_set, valid_set = split_train_valid(paired, select=False)
+        train_set, valid_set = split_train_valid(paired, select_num=0)
         assert(len(train_set) % 2 == 0)
         assert(len(valid_set) % 2 == 0)   
         cfg.dataloader.train.shuffle = False
-        train_set, valid_set = train_set[:120000], valid_set[:15000]
     else: # generation: keep 2000 pairs in validation but use unpaired for training.
-        paired, unpaired = load_transfer_pair(K=2000, N=cfg.seg_len) 
-        assert(len(paired) % 2 == 0)  # ~120 batch
-        train_set, valid_set = unpaired, paired
+        # paired, unpaired = load_transfer_pair(K=2000, N=cfg.seg_len) 
+        train_set, valid_set = split_train_valid(paired)
+    train_set, valid_set = train_set[:500000], valid_set[:15000]
 
     # Normalize data
     train_set, valid_set, means, stds = dataset_normalization(train_set, valid_set)

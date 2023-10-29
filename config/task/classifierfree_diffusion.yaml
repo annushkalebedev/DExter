@@ -3,6 +3,7 @@ task:
   dataset_stds: None
   samples_root: 'artifacts/samples'
   lr: ${learning_rate}
+  eval_starting_epoch: 0
   timesteps: 1000
   loss_type: 'l1'
   loss_keys:

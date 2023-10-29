@@ -18,6 +18,7 @@ test:
 dataloader:
     smoothed: False
     mixup: True
+    num_data: 5000   # amount of samples for evaluation - 300 epochs
     val:
         batch_size: 16
         num_workers: 4

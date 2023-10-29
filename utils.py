@@ -94,7 +94,7 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
             alignment = [{'label': "match", "score_id": sid, "performance_id": sid} for sid in snote_ids]
             eval_res = quantitative_analysis(score, alignment, performed_part, performed_part_label, performed_part_source,
                                              performed_tempo, label_tempo, source_tempo, performed_vel, label_vel, source_vel)
-            eval_res['features_results'].to_csv(f"{save_path}/{idx}_{piece_name}_eval.csv", ignore_index=True)
+            eval_res['features_results'].to_csv(f"{save_path}/{idx}_{piece_name}_eval.csv", index=False)
             eval_results.append(eval_res['features_results'])
 
         ax.flatten()[idx].plot(beats, performed_tempo, label="performed_tempo")
@@ -225,7 +225,7 @@ def dev_kl_cor_estimate(pred_feat, label_feat, source_feat,
     """
     pred_feat, label_feat, source_feat = pred_feat[~mask], label_feat[~mask], source_feat[~mask]
 
-    if len(pred_feat):
+    try:
         kde_pred = gaussian_kde(pred_feat)
         kde_label = gaussian_kde(label_feat)
         kde_source = gaussian_kde(source_feat)
@@ -235,7 +235,7 @@ def dev_kl_cor_estimate(pred_feat, label_feat, source_feat,
         pl_KL = entropy(kde_pred.pdf(pred_points), kde_label.pdf(pred_points))
         ps_KL = entropy(kde_pred.pdf(pred_points), kde_source.pdf(pred_points))
         ls_KL = entropy(kde_label.pdf(label_points), kde_source.pdf(label_points))
-    else:
+    except Exception as e:
         pl_KL, ps_KL, ls_KL = -1, -1, -1                                                                                                                                                                                                                                                                                        
     
     return {
@@ -270,29 +270,40 @@ TESTING_GROUP = [
     'VIENNA422_Schubert_D783_no15_seg0.',    
 ]
 
-def split_train_valid(codec_data, select=True):
-    """select the specific group into the first batch of validation data 
-    Returns the train set and valid set as list, the first group in the valid set is the selected samples (8 + 8 pair)
+def split_train_valid(codec_data, select_num=58008):
+    """select the train and valid set according to the following criteria: 
+        - ASAP and VIENNA422 goes to testing set as they are better ground truths
+        - split regarding to pieces.
     """
 
     train_idx = int(len(codec_data) * 0.85) - 1
     assert (train_idx % 2 == 0)
-    if not select:
+    if not select_num:
         return codec_data[:train_idx], codec_data[train_idx:]
 
-    selected_cd, unselected_cd = defaultdict(list), []
-    for cd in codec_data:
-        for name in TESTING_GROUP:
-            if (not selected_cd[name]) and name in cd['snote_id_path']:
-                selected_cd[name] = cd
-                break
+    selected_cd, unselected_cd = [], []
+    for idx in range(0, len(codec_data), 2):
+        if len(selected_cd) > select_num:  
+            break
+        cd, cd_ = codec_data[idx], codec_data[idx+1]
+        if "ATEPP" not in cd['snote_id_path']:
+            selected_cd.extend([cd, cd_])
         else:
-            unselected_cd.append(cd)
+            unselected_cd.extend([cd, cd_])
+    
+    # selected_cd, unselected_cd = defaultdict(list), []
+    # for cd in codec_data:
+    #     for name in TESTING_GROUP:
+    #         if (not selected_cd[name]) and name in cd['snote_id_path']:
+    #             selected_cd[name] = cd
+    #             break
+    #     else:
+    #         unselected_cd.append(cd)
             
     
-    np.random.shuffle(unselected_cd)
+    # np.random.shuffle(unselected_cd)
     train_set = unselected_cd[:train_idx]
-    valid_set = list(selected_cd.values()) + unselected_cd[train_idx:]
+    valid_set = selected_cd + unselected_cd[train_idx:]
 
     return train_set, valid_set
 

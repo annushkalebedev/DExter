@@ -16,7 +16,8 @@ HOP_LENGTH = 160
 SAMPLE_RATE = 16000
 
 import partitura as pt
-from utils import animate_sampling, render_sample, plot_codec, p_codec_scale, tensor_pair_swap
+from utils import animate_sampling, get_batch_slice, plot_codec, p_codec_scale, tensor_pair_swap
+from renderer import Renderer
 
 # from model.utils import Normalization
 def linear_beta_schedule(beta_start, beta_end, timesteps):
@@ -264,7 +265,7 @@ class CodecDiffusion(pl.LightningModule):
         # sample a fraction (1 percent) of the testing set
         randgen = torch.rand(1)[0]
         if randgen <= self.hparams.valid_fraction:
-            sampled_loss, fig, tempo_vel_loss, tempo_vel_cor, _, _, _ = self.predict(batch, batch_idx)
+            sampled_loss, fig, tempo_vel_loss, tempo_vel_cor, _ = self.predict(batch, batch_idx)
             
             self.logger.log_image(key=f"Val/tempo_curves", images=[fig])
             self.log(f"Val/sampled_loss", sampled_loss)
@@ -287,7 +288,7 @@ class CodecDiffusion(pl.LightningModule):
         batch_source_codec = batch_source_codec.unsqueeze(1)  # (B, 1, T, F)
 
         sample_steps = self.hparams.timesteps - 1 
-        c_codec = None
+        c_codec = None # if None, the sampling will use default p_codec of the target 
         if "transfer" not in self.hparams.training.target: # pure noise 
             noise = torch.randn_like(batch_source_codec)
             if self.hparams.transfer: # only transfer in inference
@@ -300,7 +301,6 @@ class CodecDiffusion(pl.LightningModule):
                 # combine the c_codec for the transfer
                 # c_codec = batch['c_codec'][:8] - batch['c_codec'][8:] # label minus source
                 # c_codec = 0.5 * batch['c_codec'][:8] + 0.5 * batch['c_codec'][8:] # average
-                hook()
             else:
                 start_noise = None
 
@@ -353,14 +353,8 @@ class CodecDiffusion(pl.LightningModule):
 
         tempo_vel_loss, tempo_vel_cor = 0, 0
         if len(pcodec_pred) % 2 != 1:
-            (fig, tempo_vel_loss, tempo_vel_cor, eval_results) = render_sample(pcodec_pred, batch_source, batch_label, 
-                                                f"{save_root}", 
-                                                with_source=self.hparams.transfer,
-                                                evaluate=evaluate,
-                                                means=self.hparams.dataset_means,
-                                                stds=self.hparams.dataset_stds)
-            
-            plt.savefig(f"{save_root}/tempo_curves.png")
+            fig, tempo_vel_loss, tempo_vel_cor, eval_results = self.render_batch(
+                pcodec_pred, batch_source, batch_label, save_root, evaluate=evaluate)
 
         sampled_loss = self.p_losses(batch_label_codec, torch.tensor(pcodec_pred), loss_type='l2')
 
@@ -727,4 +721,34 @@ class CodecDiffusion(pl.LightningModule):
         row1_txt = ax_flat[0].text(-400,45,f'Gaussian N(0,1)')
         row2_txt = ax_flat[4].text(-300,45,'x_{t-1}')       
 
-      
+    def render_batch(self, pcodec_pred, batch_source, batch_label, save_root, evaluate=False):
+        B = len(pcodec_pred) 
+
+        # rescale the predictions and labels back to normal
+        pcodec_pred = p_codec_scale(pcodec_pred, self.means, self.stds)
+        batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], self.means, self.stds)
+        batch_label['p_codec'] = p_codec_scale(batch_label['p_codec'], self.means, self.stds)
+
+        fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 3*B))
+
+        tempo_vel_loss, tempo_vel_cor = 0, 0
+        for idx in range(B): 
+            renderer = Renderer(save_root, 
+                                pcodec_pred[idx],  
+                                get_batch_slice(batch_source, idx), 
+                                get_batch_slice(batch_label, idx), 
+                                with_source=self.hparams.transfer,
+                                means=self.hparams.dataset_means,
+                                stds=self.hparams.dataset_stds,
+                                idx=idx, B=B)
+            
+            tvl, tvc = renderer.render_sample()
+            tempo_vel_loss += tvl 
+            tempo_vel_cor += tvc
+            renderer.plot_curves(ax)
+            if evaluate:
+                renderer.evaluate()
+            
+        plt.savefig(f"{save_root}/tempo_curves.png") 
+
+        return fig, tempo_vel_loss / B, tempo_vel_cor / B

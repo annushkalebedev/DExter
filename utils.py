@@ -24,8 +24,15 @@ def tensor_pair_swap(x):
     permute_index = torch.arange(x.shape[0]).view(-1, 2)[:, [1, 0]].contiguous().view(-1)
     return x[permute_index]
 
+
+def get_batch_slice(batch, idx):
+    """given a dictionary batch, get the sliced ditionary given idx"""
+
+    return {k: v[idx] for k, v in batch.items()}
+
+
 def render_sample(sampled_parameters,  batch_source, batch_label, save_path, 
-                  with_source=False, save_interpolation=False, evaluate=False,
+                  with_source=False, evaluate=False,
                   means=None, stds=None):
     """
     render the sample to midi file and save 
@@ -34,11 +41,12 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
             "score_path" : score_path to load
             "snote_id_path" : snote_id path to load
         save_path: root directory to save
-        with_source: whether source is provided 
+        with_source: whether to use the source.
         save_interpolation: weather 
         
     """
     B = len(sampled_parameters) 
+
     # rescale the predictions and labels back to normal
     sampled_parameters = p_codec_scale(sampled_parameters, means, stds)
     batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], means, stds)
@@ -46,74 +54,34 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
 
     fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 3*B))
     eval_results = []
-    for idx in range(B): 
 
-        if np.isnan(sampled_parameters[idx]).any(): # but why there are nan being sampled?
-            continue 
+    for idx in range(B): 
         
         performance_array = parameters_to_performance_array(sampled_parameters[idx])
         pcodec_label = parameters_to_performance_array(batch_label['p_codec'][idx].cpu())
         pcodec_source = parameters_to_performance_array(batch_source['p_codec'][idx].cpu())
 
-        # update the snote_id_path to the new one
-        # snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
-        snote_id_path = batch_source['snote_id_path'][idx]
-        snote_ids = np.load(snote_id_path)
-        if len(snote_ids) < 10: # when there is too few notes, the rendering would have problems.
-            continue
-        score = pt.load_musicxml(batch_source['score_path'][idx], force_note_ids='keep')
-        # unfold the score if necessary (mostly for ASAP)
-        if ("-" in snote_ids[0] and 
-            "-" not in score.note_array()['id'][0]):
-            score = pt.score.unfold_part_maximal(pt.score.merge_parts(score.parts)) 
-        piece_name = batch_source['piece_name'][idx]
-        N = len(snote_ids)
-        
-        pad_mask = np.full(snote_ids.shape, False)
-        performed_part = pt.musicanalysis.decode_performance(score, performance_array[:N], snote_ids=snote_ids, pad_mask=pad_mask)
-        performed_part_label = pt.musicanalysis.decode_performance(score, pcodec_label[:N], snote_ids=snote_ids, pad_mask=pad_mask)
-        performed_part_source = pt.musicanalysis.decode_performance(score, pcodec_source[:N], snote_ids=snote_ids, pad_mask=pad_mask)
-
-        # compute the tempo curve of sampled parameters (avg for joint-onsets)
-        if with_source:
-            beats, performed_tempo, performed_vel, label_tempo, label_vel, source_tempo, source_vel = compare_performance_curve(
-                                                    score, snote_ids, performance_array,
-                                                    pcodec_label, 
-                                                    pcodec_source=pcodec_source)
-        else:
-            beats, performed_tempo, performed_vel, label_tempo, label_vel = compare_performance_curve(
-                                                    score, snote_ids, performance_array,
-                                                    pcodec_label)
-
-        tempo_vel_loss = F.l1_loss(torch.tensor(performed_tempo), torch.tensor(label_tempo)) + \
-                                F.l1_loss(torch.tensor(performed_vel), torch.tensor(label_vel)) 
-        tempo_vel_cor = pearsonr(performed_tempo, label_tempo)[0] + pearsonr(performed_vel, label_vel)[0]
-
-        if evaluate:
-            # provide analysis to the generated performance 
-            alignment = [{'label': "match", "score_id": sid, "performance_id": sid} for sid in snote_ids]
-            eval_res = quantitative_analysis(score, alignment, performed_part, performed_part_label, performed_part_source,
-                                             performed_tempo, label_tempo, source_tempo, performed_vel, label_vel, source_vel)
-            eval_res['features_results'].to_csv(f"{save_path}/{idx}_{piece_name}_eval.csv", index=False)
-            eval_results.append(eval_res['features_results'])
-
-        ax.flatten()[idx].plot(beats, performed_tempo, label="performed_tempo")
-        ax.flatten()[idx].plot(beats, label_tempo, label="label_tempo")
-        ax.flatten()[idx].set_ylim(0, 300)
-
-        ax.flatten()[idx+B].plot(beats, performed_vel, label="performed_vel")
-        ax.flatten()[idx+B].plot(beats, label_vel, label="label_vel")
-
-        if with_source:
-            ax.flatten()[idx].plot(beats, source_tempo, label="source_tempo")
-            ax.flatten()[idx+B].plot(beats, source_vel, label="source_vel")
-
-        ax.flatten()[idx].legend()
-        ax.flatten()[idx].set_title(f"tempo: {piece_name}")   
-        ax.flatten()[idx+B].legend()
-        ax.flatten()[idx+B].set_title(f"vel: {piece_name}")
-
         try:
+            # load the batch information and decode into performed parts
+            (performed_part, performed_part_label, performed_part_source, score, piece_name, snote_ids) = load_and_decode(
+                performance_array, pcodec_label, pcodec_source, batch_source, idx)
+
+            # compute the tempo curve of sampled parameters (avg for joint-onsets)
+            beats, performed_tempo, performed_vel, label_tempo, label_vel, source_tempo, source_vel = compare_performance_curve(
+                                                        score, snote_ids, performance_array, pcodec_label, pcodec_source=pcodec_source)
+
+            # get loss and correlation metrics
+            tempo_vel_loss = F.l1_loss(torch.tensor(performed_tempo), torch.tensor(label_tempo)) + \
+                                    F.l1_loss(torch.tensor(performed_vel), torch.tensor(label_vel))
+            tempo_vel_cor = pearsonr(performed_tempo, label_tempo)[0] + pearsonr(performed_vel, label_vel)[0]
+
+            if evaluate: # provide analysis to the generated performance 
+                eval_res = quantitative_analysis(score, snote_ids, performed_part, performed_part_label, performed_part_source,
+                                                performed_tempo, label_tempo, source_tempo, performed_vel, label_vel, source_vel)
+                eval_results.append(eval_res['features_results'])
+
+            plot_curves(ax, idx, B, beats, performed_tempo, label_tempo, performed_vel, label_vel, source_tempo, source_vel, piece_name, with_source)
+
             pt.save_performance_midi(performed_part, f"{save_path}/{idx}_{piece_name}.mid")
             if evaluate:
                 pt.save_performance_midi(performed_part_label, f"{save_path}/{idx}_{piece_name}_label.mid")
@@ -122,6 +90,29 @@ def render_sample(sampled_parameters,  batch_source, batch_label, save_path,
             print(e)
 
     return fig, tempo_vel_loss, tempo_vel_cor, eval_results
+
+def load_and_decode(performance_array, pcodec_label, pcodec_source, batch_source, idx):
+    # update the snote_id_path to the new one
+    # snote_id_path = batch['snote_id_path'][idx].replace("data", "/import/c4dm-datasets-ext/DiffPerformer")
+    snote_id_path = batch_source['snote_id_path'][idx]
+    snote_ids = np.load(snote_id_path)
+
+    if len(snote_ids) < 10: # when there is too few notes, the rendering would have problems.
+        raise RuntimeError("snote_ids too short")
+    score = pt.load_musicxml(batch_source['score_path'][idx], force_note_ids='keep')
+    # unfold the score if necessary (mostly for ASAP)
+    if ("-" in snote_ids[0] and 
+        "-" not in score.note_array()['id'][0]):
+        score = pt.score.unfold_part_maximal(pt.score.merge_parts(score.parts)) 
+    piece_name = batch_source['piece_name'][idx]
+    N = len(snote_ids)
+    
+    pad_mask = np.full(snote_ids.shape, False)
+    performed_part = pt.musicanalysis.decode_performance(score, performance_array[:N], snote_ids=snote_ids, pad_mask=pad_mask)
+    performed_part_label = pt.musicanalysis.decode_performance(score, pcodec_label[:N], snote_ids=snote_ids, pad_mask=pad_mask)
+    performed_part_source = pt.musicanalysis.decode_performance(score, pcodec_source[:N], snote_ids=snote_ids, pad_mask=pad_mask)
+
+    return performed_part, performed_part_label, performed_part_source, score, piece_name, snote_ids
 
 
 def compare_performance_curve(score, snote_ids, pcodec_pred, pcodec_label, pcodec_source=None):
@@ -153,9 +144,30 @@ def compare_performance_curve(score, snote_ids, pcodec_pred, pcodec_label, pcode
         bp = [joint_pcodec[joint_pcodec['onset_beat'] == ob]['beat_period'].mean() for ob in onset_beats]
         vel = [joint_pcodec[joint_pcodec['onset_beat'] == ob]['velocity'].mean() for ob in onset_beats]
         tempo_curve_pred = interp1d(onset_beats, 60 / np.array(bp))
-        res.extend([60 / np.array(bp), np.array(vel)])
+        tempo_curve, velocity_curve = 60 / np.array(bp), np.array(vel)
+        if np.isinf(tempo_curve).any():
+            raise RuntimeError("inf in tempo")
+        res.extend([tempo_curve, velocity_curve])
 
     return res
+
+def plot_curves(ax, idx, B, beats, performed_tempo, label_tempo, performed_vel, label_vel, source_tempo, source_vel, piece_name, with_source=False):
+    ax.flatten()[idx].plot(beats, performed_tempo, label="performed_tempo")
+    ax.flatten()[idx].plot(beats, label_tempo, label="label_tempo")
+    ax.flatten()[idx].set_ylim(0, 300)
+
+    ax.flatten()[idx+B].plot(beats, performed_vel, label="performed_vel")
+    ax.flatten()[idx+B].plot(beats, label_vel, label="label_vel")
+
+    if with_source:
+        ax.flatten()[idx].plot(beats, source_tempo, label="source_tempo")
+        ax.flatten()[idx+B].plot(beats, source_vel, label="source_vel")
+
+    ax.flatten()[idx].legend()
+    ax.flatten()[idx].set_title(f"tempo: {piece_name}")   
+    ax.flatten()[idx+B].legend()
+    ax.flatten()[idx+B].set_title(f"vel: {piece_name}")
+    return 
 
 
 def parameters_to_performance_array(parameters):
@@ -169,8 +181,8 @@ def parameters_to_performance_array(parameters):
     return performance_array
 
 
-def quantitative_analysis(score, alignment, performed_part, performed_part_label, performed_part_source,
-                          performed_tempo, label_tempo, source_tempo, performed_vel, label_vel, source_vel):
+def quantitative_analysis(score, snote_ids, alignment, performed_part, performed_part_label, performed_part_source,
+                          performed_tempo, label_tempo, source_tempo, performed_vel, label_vel, source_vel, eval_save_path):
     '''
     For codec attributes:
         - Tempo and velocity deviation
@@ -180,19 +192,24 @@ def quantitative_analysis(score, alignment, performed_part, performed_part_label
         - Deviation of each parameter on note level (for articulation: drop the ones with mask?)
         - Distribution difference of each parameters using KL estimation.
     '''
+    alignment = [{'label': "match", "score_id": sid, "performance_id": sid} for sid in snote_ids]
 
     feats_pred, res = pt.musicanalysis.compute_performance_features(score, performed_part, alignment, feature_functions='all')
     feats_label, res = pt.musicanalysis.compute_performance_features(score, performed_part_label, alignment, feature_functions='all')
     feats_source, res = pt.musicanalysis.compute_performance_features(score, performed_part_source, alignment, feature_functions='all')
 
+    feats_pred.to_csv(f"{eval_save_path}_feats_pred.csv", index=False)
+    feats_pred.to_csv(f"{eval_save_path}_feats_pred.csv", index=False)
+    feats_pred.to_csv(f"{eval_save_path}_feats_pred.csv", index=False)
+    
     features_results = {}
     for feat_name in ['articulation_feature.kor',
                       'asynchrony_feature.pitch_cor',
                       'asynchrony_feature.vel_cor',
                       'asynchrony_feature.delta',
-                    #   'dynamics_feature.agreement',
-                    #   'dynamics_feature.consistency_std',
-                    #   'dynamics_feature.ramp_cor',
+                      'dynamics_feature.agreement',
+                      'dynamics_feature.consistency_std',
+                      'dynamics_feature.ramp_cor',
                       'dynamics_feature.tempo_cor',
                       'pedal_feature.onset_value'
                       ]:
@@ -213,6 +230,7 @@ def quantitative_analysis(score, alignment, performed_part, performed_part_label
         "feats_source": feats_source,
         "features_results": features_results
     }
+
 
 def dev_kl_cor_estimate(pred_feat, label_feat, source_feat, 
                         N=300, mask=None):

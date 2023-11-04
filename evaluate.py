@@ -19,10 +19,13 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from utils import *
+from renderer import Renderer
 import hook
 
 def eval_renderer(cfg, val_loader):
     """run the evaluation set on other renderer for comparison
+    - Basis Mixer
+    - 
     """
 
     for batch_idx, batch in enumerate(val_loader):
@@ -39,10 +42,14 @@ def eval_renderer(cfg, val_loader):
             mid_out_dir = f"{cfg.task.samples_root}/EVAL-{cfg.renderer}/batch={batch_idx}/"
             mid_out_path = f"{mid_out_dir}/{idx}_{piece_name}.mid"
             os.makedirs(mid_out_dir, exist_ok=True)
+            # already modified the original to only render the segment
             os.system(f"python {cfg.renderer_path} {batch['score_path'][idx]} {mid_out_path} {batch['snote_id_path'][idx]}")
 
             if os.path.exists(mid_out_path):
                 # generate evaluation file
+                renderer = Renderer()
+                renderer.load_external_performances(mid_out_path, batch['score_path'][idx], snote_ids)
+                
                 pass
     return 
 

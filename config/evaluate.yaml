@@ -2,8 +2,9 @@ renderer: "diff"  # "basismixer"
 gpus: [0]
 epochs: 400
 learning_rate: 5e-5
-renderer_path: /homes/hz009/Research/basismixer/bin/render_performance.py
-pretrained_path: 'artifacts/checkpoint/targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C512-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/last.ckpt'
+renderer_path: /homes/hz009/Research/basismixer/bin/render_performance.py  # basis mixer renderer path
+# pretrained_path: 'artifacts/checkpoint/targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C512-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/last.ckpt'
+pretrained_path: 'artifacts/checkpoint/targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/last-v1.ckpt'
 data_root: '/import/c4dm-datasets-ext/DiffPerformer/'
 seg_len: 200
 pin_memory: True
@@ -18,7 +19,7 @@ test:
 dataloader:
     smoothed: False
     mixup: True
-    num_data: 5000   # amount of samples for evaluation - 300 epochs
+    num_data: 160   # amount of samples for evaluation ~ 300 epochs
     val:
         batch_size: 16
         num_workers: 4

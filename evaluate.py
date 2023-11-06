@@ -25,12 +25,13 @@ import hook
 def eval_renderer(cfg, val_loader):
     """run the evaluation set on other renderer for comparison
     - Basis Mixer
-    - 
+    - ScorePerformer
     """
 
+    
     for batch_idx, batch in enumerate(val_loader):
 
-        for idx in range(cfg.dataloader.val.batch_size): 
+        for idx in range(0, cfg.dataloader.val.batch_size, 2): 
 
             snote_id_path = batch['snote_id_path'][idx]
             snote_ids = np.load(snote_id_path)
@@ -40,17 +41,23 @@ def eval_renderer(cfg, val_loader):
             piece_name = batch['piece_name'][idx]
             
             mid_out_dir = f"{cfg.task.samples_root}/EVAL-{cfg.renderer}/batch={batch_idx}/"
-            mid_out_path = f"{mid_out_dir}/{idx}_{piece_name}.mid"
-            os.makedirs(mid_out_dir, exist_ok=True)
-            # already modified the original to only render the segment
-            os.system(f"python {cfg.renderer_path} {batch['score_path'][idx]} {mid_out_path} {batch['snote_id_path'][idx]}")
 
-            if os.path.exists(mid_out_path):
-                # generate evaluation file
-                renderer = Renderer()
-                renderer.load_external_performances(mid_out_path, batch['score_path'][idx], snote_ids)
-                
-                pass
+            if cfg.renderer == 'basismixer':
+                mid_out_path = f"{mid_out_dir}/{idx}_{piece_name}.mid"
+                os.makedirs(mid_out_dir, exist_ok=True)
+                # already modified the original to only render the segment
+                os.system(f"python {cfg.renderer_path} {batch['score_path'][idx]} {mid_out_path} {batch['snote_id_path'][idx]}")
+
+                # load the saved label performance from the generation directory
+                lpp = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/{idx}_{piece_name}_label.mid"
+                if os.path.exists(mid_out_path):
+                    # generate evaluation file
+                    renderer = Renderer(mid_out_dir)
+                    renderer.load_external_performances(mid_out_path, batch['score_path'][idx], snote_ids,
+                                                        label_performance_path=lpp)
+                    renderer.save_performance_features()
+                    renderer.save_pf_distribution()
+                    hook()
     return 
 
 
@@ -105,7 +112,7 @@ def main(cfg):
                             )
         
         trainer.test(model, val_loader)
-    elif cfg.renderer == "basismixer":
+    else:
         eval_renderer(cfg, val_loader)
     
 

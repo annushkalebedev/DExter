@@ -26,38 +26,48 @@ class Renderer():
     - label_data: same with source data
 
     """
-    def __init__(self, 
+    def __init__(self, save_root,
                  sampled_pcodec=None,  
                  source_data=None, label_data=None,
-                 save_path=None, 
                  with_source=False,
                  means=None, stds=None,
                  idx=0, B=16):
         
+        self.save_root = save_root
         self.sampled_pcodec = sampled_pcodec
         self.source_data = source_data
         self.label_data = label_data
-        self.save_path = save_path
         self.with_source = with_source
         self.means = means
         self.stds = stds
         self.idx = idx
         self.B = B
 
-    def load_external_performances(self, performance_path, score_path, snote_ids):
+    def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None):
         """load the performance that's already generated (for evaluating other models)"""
 
         self.performed_part = pt.load_performance(performance_path).performedparts[0]
         self.score = pt.load_score(score_path)
         self.snote_ids = snote_ids
+        # unfold the score if necessary (mostly for ASAP)
+        if ("-" in self.snote_ids[0] and 
+            "-" not in self.score.note_array()['id'][0]):
+            self.score = pt.score.unfold_part_maximal(pt.score.merge_parts(self.score.parts)) 
+        
+        if label_performance_path:
+            self.performed_part_label = pt.load_performance(label_performance_path).performedparts[0]
 
-        return 
+        self.alignment = [{'label': "match", "score_id": sid, "performance_id": f"n{i}"} for i, sid in enumerate(self.snote_ids)]
+        self.pcodec_pred, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part, self.alignment)
+        self.pcodec_label, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part_label, self.alignment)
+        self.compare_performance_curve(with_source=False)
 
-    def render_sample(self, save_sourcelabel):
+
+    def render_sample(self, save_sourcelabel=False):
         """render the sample to midi file and save 
         """
 
-        self.performance_array = self.parameters_to_performance_array(self.sampled_pcodec)
+        self.pcodec_pred = self.parameters_to_performance_array(self.sampled_pcodec)
         self.pcodec_label = self.parameters_to_performance_array(self.label_data['p_codec'].cpu())
         self.pcodec_source = self.parameters_to_performance_array(self.source_data['p_codec'].cpu())
 
@@ -73,57 +83,65 @@ class Renderer():
                                     F.l1_loss(torch.tensor(self.performed_vel), torch.tensor(self.label_vel))
             tempo_vel_cor = pearsonr(self.performed_tempo, self.label_tempo)[0] + pearsonr(self.performed_vel, self.label_vel)[0]
 
-            pt.save_performance_midi(self.performed_part, f"{self.save_path}/{self.idx}_{self.piece_name}.mid")
+            pt.save_performance_midi(self.performed_part, f"{self.save_root}/{self.idx}_{self.piece_name}.mid")
             if save_sourcelabel:
-                pt.save_performance_midi(self.performed_part_label, f"{self.save_path}/{self.idx}_{self.piece_name}_label.mid")
-                pt.save_performance_midi(self.performed_part_source, f"{self.save_path}/{self.idx}_{self.piece_name}_source.mid")
+                pt.save_performance_midi(self.performed_part_label, f"{self.save_root}/{self.idx}_{self.piece_name}_label.mid")
+                pt.save_performance_midi(self.performed_part_source, f"{self.save_root}/{self.idx}_{self.piece_name}_source.mid")
         except Exception as e:
             print(e)
 
         return tempo_vel_loss, tempo_vel_cor
 
 
-    def load_and_decode(self, performance_array, pcodec_label, source_data):
-        """load the meta information (scores, snote_ids and piece name)
-        then decode the p_codecs into performed parts  
+    def load_and_decode(self):
+        """load the meta information (scores, snote_ids and piece name) then decode the p_codecs into performed parts  
+        load into module:
+            - self.performed_part
+            - self.performed_part_label
+            - self.performed_part_source
+            - snote_ids
+            - score
+            - piece_name
          """
         # update the snote_id_path to the new one
-        snote_id_path = source_data['snote_id_path']
+        snote_id_path = self.source_data['snote_id_path']
         self.snote_ids = np.load(snote_id_path)
 
         if len(self.snote_ids) < 10: # when there is too few notes, the rendering would have problems.
             raise RuntimeError("snote_ids too short")
-        self.score = pt.load_musicxml(source_data['score_path'], force_note_ids='keep')
+        self.score = pt.load_musicxml(self.source_data['score_path'], force_note_ids='keep')
         # unfold the score if necessary (mostly for ASAP)
         if ("-" in self.snote_ids[0] and 
-            "-" not in score.note_array()['id'][0]):
-            score = pt.score.unfold_part_maximal(pt.score.merge_parts(score.parts)) 
-        self.piece_name = source_data['piece_name']
+            "-" not in self.score.note_array()['id'][0]):
+            self.score = pt.score.unfold_part_maximal(pt.score.merge_parts(self.score.parts)) 
+        self.piece_name = self.source_data['piece_name']
         N = len(self.snote_ids)
         
         pad_mask = np.full(self.snote_ids.shape, False)
-        self.performed_part = pt.musicanalysis.decode_performance(score, performance_array[:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
-        self.performed_part_label = pt.musicanalysis.decode_performance(score, pcodec_label[:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
-        self.performed_part_source = pt.musicanalysis.decode_performance(score, source_data['p_codec'][:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
+        self.performed_part = pt.musicanalysis.decode_performance(self.score, self.pcodec_pred[:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
+        self.performed_part_label = pt.musicanalysis.decode_performance(self.score, self.pcodec_label[:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
+        self.performed_part_source = pt.musicanalysis.decode_performance(self.score, self.pcodec_source[:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
 
 
-    def compare_performance_curve(self):
+    def compare_performance_curve(self, with_source=True):
         """compute the performance curve (tempo curve \ velocity curve) from given performance array
             pcodec_original: another parameter curve, coming from the optional starting point of transfer
 
-        Returns: (mark for self)
-            onset_beats : 
-            performed_tempo
-            label_tempo
-            source_tempo
-            performed_vel
-            label_vel
-            source_vel 
+        Returns: (load into module)
+            - onset_beats
+            - performed_tempo
+            - label_tempo
+            - source_tempo
+            - performed_vel
+            - label_vel
+            - source_vel 
         """
         na = self.score.note_array()
         na = na[np.in1d(na['id'], self.snote_ids)]
 
-        pcodecs = [self.pcodec_pred, self.pcodec_label, self.pcodec_source]
+        pcodecs = [self.pcodec_pred, self.pcodec_label]
+        if with_source:
+            pcodecs.append(self.pcodec_source)
 
         self.onset_beats = np.unique(na['onset_beat'])
         res = [self.onset_beats]
@@ -138,20 +156,23 @@ class Renderer():
                 raise RuntimeError("inf in tempo")
             res.extend([tempo_curve, velocity_curve])
 
-        _, self.performed_tempo, self.performed_vel, self.label_tempo, self.label_vel, self.source_tempo, self.source_vel = res
+        if with_source:
+            _, self.performed_tempo, self.performed_vel, self.label_tempo, self.label_vel, self.source_tempo, self.source_vel = res
+        else:
+            _, self.performed_tempo, self.performed_vel, self.label_tempo, self.label_vel = res
 
 
     def plot_curves(self, ax):
-        ax.flatten()[self.idx].plot(self.beats, self.performed_tempo, label="performed_tempo")
-        ax.flatten()[self.idx].plot(self.beats, self.label_tempo, label="label_tempo")
+        ax.flatten()[self.idx].plot(self.onset_beats, self.performed_tempo, label="performed_tempo")
+        ax.flatten()[self.idx].plot(self.onset_beats, self.label_tempo, label="label_tempo")
         ax.flatten()[self.idx].set_ylim(0, 300)
 
-        ax.flatten()[self.idx+self.B].plot(self.beats, self.performed_vel, label="performed_vel")
-        ax.flatten()[self.idx+self.B].plot(self.beats, self.label_vel, label="label_vel")
+        ax.flatten()[self.idx+self.B].plot(self.onset_beats, self.performed_vel, label="performed_vel")
+        ax.flatten()[self.idx+self.B].plot(self.onset_beats, self.label_vel, label="label_vel")
 
         if self.with_source:
-            ax.flatten()[self.idx].plot(self.beats, self.source_tempo, label="source_tempo")
-            ax.flatten()[self.idx+self.B].plot(self.beats, self.source_vel, label="source_vel")
+            ax.flatten()[self.idx].plot(self.onset_beats, self.source_tempo, label="source_tempo")
+            ax.flatten()[self.idx+self.B].plot(self.onset_beats, self.source_vel, label="source_vel")
 
         ax.flatten()[self.idx].legend()
         ax.flatten()[self.idx].set_title(f"tempo: {self.piece_name}")   
@@ -171,7 +192,7 @@ class Renderer():
 
 
 
-    def quantitative_analysis(self, eval_save_path):
+    def save_performance_features(self, save_source=False, save_label=False):
         '''
         For codec attributes:
             - Tempo and velocity deviation
@@ -183,25 +204,39 @@ class Renderer():
         '''
         alignment = [{'label': "match", "score_id": sid, "performance_id": sid} for sid in self.snote_ids]
 
-        self.feats_pred, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part, alignment, feature_functions='all')
-        self.feats_pred.to_csv(f"{eval_save_path}_feats_pred.csv", index=False)
+        self.feats_pred, self.res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part, alignment, feature_functions='all')
+        pd.DataFrame(self.feats_pred).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_pred.csv", index=False)
+        self.feats_label, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part_label, alignment, feature_functions='all')
 
-        
-        if not type(self.source_data) == type(None):
-            self.feats_label, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part_label, alignment, feature_functions='all')
+        if save_source:
             self.feats_source, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part_source, alignment, feature_functions='all')
+            pd.DataFrame(self.feats_source).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_source.csv", index=False)
 
-            self.feats_label.to_csv(f"{eval_save_path}_feats_label.csv", index=False)
-            self.feats_source.to_csv(f"{eval_save_path}_feats_source.csv", index=False)
-        
-        return {
-            "feats_pred": self.feats_pred,
-            "feats_label": self.feats_label,
-            "feats_source": self.feats_source,
-        }
+        if save_label:
+            pd.DataFrame(self.feats_source).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_label.csv", index=False)
 
-    def distribution_analysis(self):
+
+
+    def save_pf_distribution(self, pred_label=True, pred_source=False, label_source=False):
+        """compare distributions of the performance features, default is comparing the prediction & label
+
+        pre-requisite:
+        - features of pred and label
+        - tempo curve of pred and label
+        - velocity curve of pred and label
+        """
         features_distribution = {}
+
+        if pred_label:
+            feat_1, feat_2, tempo_1, tempo_2, vel_1, vel_2 = self.feats_pred, self.feats_label, self.performed_tempo, self.label_tempo, self.performed_vel, self.label_vel
+            name = "pred_label"
+        if pred_source:
+            feat_1, feat_2, tempo_1, tempo_2, vel_1, vel_2 = self.feats_pred, self.feats_source, self.performed_tempo, self.source_tempo, self.performed_vel, self.source_vel
+            name = "pred_source"
+        if label_source:
+            feat_1, feat_2, tempo_1, tempo_2, vel_1, vel_2 = self.feats_label, self.feats_source, self.label_tempo, self.source_tempo, self.label_vel, self.source_vel
+            name = "label_source"
+
         for feat_name in ['articulation_feature.kor',
                         'asynchrony_feature.pitch_cor',
                         'asynchrony_feature.vel_cor',
@@ -213,18 +248,18 @@ class Renderer():
                         'pedal_feature.onset_value'
                         ]:
             
-            mask = np.full(res['no_kor_mask'].shape, False)
+            mask = np.full(self.res['no_kor_mask'].shape, False)
             if 'kor' in feat_name:
-                mask = res['no_kor_mask']
-            features_distribution[feat_name] = dev_kl_cor_estimate(self.feats_pred[feat_name], self.feats_label[feat_name], self.feats_source[feat_name],
-                                                            mask=mask)
+                mask = self.res['no_kor_mask']
+            features_distribution[feat_name] = self.dev_kl_cor_estimate(feat_1[feat_name], feat_2[feat_name], mask=mask)
 
-        features_distribution["tempo_curve"] = dev_kl_cor_estimate(self.performed_tempo, self.label_tempo, self.source_tempo, mask=np.full(self.performed_tempo.shape, False))    
-        features_distribution["vel_curve"] = dev_kl_cor_estimate(self.performed_vel, self.label_vel, self.source_vel, mask=np.full(self.performed_vel.shape, False))    
+        features_distribution["tempo_curve"] = self.dev_kl_cor_estimate(tempo_1, tempo_2, mask=np.full(self.performed_tempo.shape, False))    
+        features_distribution["vel_curve"] = self.dev_kl_cor_estimate(vel_1, vel_2, mask=np.full(self.performed_vel.shape, False))    
         self.features_distribution = pd.DataFrame(features_distribution)
+        self.features_distribution.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_{name}_distribution.csv", index=False)
 
 
-    def dev_kl_cor_estimate(self, pred_feat, label_feat, source_feat, 
+    def dev_kl_cor_estimate(self, feat_1, feat_2, 
                         N=300, mask=None):
         """
             dev: deviation between the prediction and the target / source we want to compare with.
@@ -233,28 +268,19 @@ class Renderer():
 
             mask: for the values that we don't want to look at. 
         """
-        pred_feat, label_feat, source_feat = pred_feat[~mask], label_feat[~mask], source_feat[~mask]
+        feat_1, feat_2 = feat_1[~mask], feat_2[~mask]
 
         try:
-            kde_pred = gaussian_kde(pred_feat)
-            kde_label = gaussian_kde(label_feat)
-            kde_source = gaussian_kde(source_feat)
+            kde_1 = gaussian_kde(feat_1)
+            kde_label = gaussian_kde(feat_2)
 
-            pred_points = kde_pred.resample(N) 
-            label_points = kde_label.resample(N) 
-            pl_KL = entropy(kde_pred.pdf(pred_points), kde_label.pdf(pred_points))
-            ps_KL = entropy(kde_pred.pdf(pred_points), kde_source.pdf(pred_points))
-            ls_KL = entropy(kde_label.pdf(label_points), kde_source.pdf(label_points))
+            pred_points = kde_1.resample(N) 
+            KL = entropy(kde_1.pdf(pred_points), kde_label.pdf(pred_points))
         except Exception as e:
-            pl_KL, ps_KL, ls_KL = -1, -1, -1                                                                                                                                                                                                                                                                                        
+            KL = -1   # null value since KL can't be negative                                                                                                                                                                                                                                                      
         
         return {
-            "label_dev(percent)": np.ma.masked_invalid((pred_feat - label_feat) / label_feat).mean(), # filter out the inf and nan
-            "source_dev(percent)": np.ma.masked_invalid((pred_feat - source_feat) / (source_feat)).mean(),
-            "pred-label(KL)": pl_KL,
-            "pred-source(KL)": ps_KL,
-            "label-source(KL)": ls_KL,
-            "pred-label(cor)": pearsonr(pred_feat, label_feat)[0],
-            "pred-source(cor)": pearsonr(pred_feat, source_feat)[0],
-            "label-source(cor)": pearsonr(label_feat, source_feat)[0],
+            "label_dev(percent)": np.ma.masked_invalid((feat_1 - feat_2) / feat_2).mean(), # filter out the inf and nan
+            "pred-label(KL)": KL,
+            "pred-label(cor)": pearsonr(feat_1, feat_2)[0],
         }

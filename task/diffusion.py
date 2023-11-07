@@ -284,44 +284,39 @@ class CodecDiffusion(pl.LightningModule):
         batch_source = batch
         batch_label = dict([(k, tensor_pair_swap(v)) for k, v in batch.items()])
 
-        batch_source_codec = batch_source['p_codec']
-        batch_source_codec = batch_source_codec.unsqueeze(1)  # (B, 1, T, F)
+        # rescale
+        batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], self.hparams.dataset_means, self.hparams.dataset_stds)
+        batch_label['p_codec'] = p_codec_scale(batch_label['p_codec'], self.hparams.dataset_means, self.hparams.dataset_stds)
 
-        sample_steps = self.hparams.timesteps - 1 
-        c_codec = None # if None, the sampling will use default p_codec of the target 
-        if "transfer" not in self.hparams.training.target: # pure noise 
-            noise = torch.randn_like(batch_source_codec)
-            if self.hparams.transfer: # only transfer in inference
-                sample_steps = int((self.hparams.timesteps - 1) * self.hparams.sample_steps_frac) # steps for noisify the source
-                start_noise = q_sample(x_start=batch_source_codec,
-                                    t=torch.tensor([sample_steps] * int(batch['p_codec'].shape[0])),
-                                    sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
-                                    sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
-                                    noise=noise)
-                # combine the c_codec for the transfer
-                # c_codec = batch['c_codec'][:8] - batch['c_codec'][8:] # label minus source
-                # c_codec = 0.5 * batch['c_codec'][:8] + 0.5 * batch['c_codec'][8:] # average
-            else:
-                start_noise = None
-
-        else: # transfer in training
-            start_noise = batch_source_codec
-            c_codec = batch_label['c_codec'] - batch_source['c_codec']
-
-        pred_list = self.p_sample(batch_label, start_noise=start_noise, 
-                                   sample_steps=sample_steps,
-                                   c_codec=c_codec)  
-
-        # noise_list: [(pred_t, t), ..., (pred_0, 0)]
-        pcodec_pred, _ = pred_list[-1] # (B, 1, T, F)        
-        batch_label_codec = batch_label['p_codec'].unsqueeze(1).cpu()
-
-        N = len(batch_label['score_path']) 
         save_root = f'{self.hparams.samples_root}/{self.logger._name}/epoch={self.current_epoch}/batch={batch_idx}'
-        os.makedirs(save_root, exist_ok=True)
 
-        # save the prediction samples (of one batch) and render. 
-        np.save(f'{save_root}/test_sample.npy', pcodec_pred)
+        c_configs = self.set_eval_c_config()
+        
+        for c_config in c_configs:
+            save_root_ = save_root + f"/{c_config}"
+            start_noise, sample_steps, c_codec = self.set_predict_start(batch_source, batch_label, c_config=c_config)
+
+            pred_list = self.p_sample(batch_label, start_noise=start_noise, 
+                                    sample_steps=sample_steps,
+                                    c_codec=c_codec)  
+
+            # noise_list: [(pred_t, t), ..., (pred_0, 0)]
+            pcodec_pred, _ = pred_list[-1] # (B, 1, T, F)        
+            batch_label_codec = batch_label['p_codec'].unsqueeze(1).cpu()
+            N = len(batch_label['score_path']) 
+            
+            os.makedirs(save_root_, exist_ok=True)
+
+            # save the prediction samples (of one batch) and render. 
+            np.save(f'{save_root_}/test_sample.npy', pcodec_pred)
+
+            # rescale the predictions and labels back to normal
+            pcodec_pred = p_codec_scale(pcodec_pred, self.hparams.dataset_means, self.hparams.dataset_stds)
+
+            tempo_vel_loss, tempo_vel_cor = 0, 0
+            if len(pcodec_pred) % 2 != 1:
+                fig, tempo_vel_loss, tempo_vel_cor = self.render_batch(
+                    pcodec_pred, batch_source, batch_label, save_root_, evaluate=evaluate)
 
         if save_animation:
             t_list = torch.arange(1, self.hparams.timesteps, 20).flip(0)
@@ -351,10 +346,6 @@ class CodecDiffusion(pl.LightningModule):
         self.logger.log_image(key=f"Val/pred_label", images=[fig])
         plt.savefig(f"{save_root}/pred_label.png")
 
-        tempo_vel_loss, tempo_vel_cor = 0, 0
-        if len(pcodec_pred) % 2 != 1:
-            fig, tempo_vel_loss, tempo_vel_cor = self.render_batch(
-                pcodec_pred, batch_source, batch_label, save_root, evaluate=evaluate)
 
         sampled_loss = self.p_losses(batch_label_codec, torch.tensor(pcodec_pred), loss_type='l2')
 
@@ -724,11 +715,6 @@ class CodecDiffusion(pl.LightningModule):
     def render_batch(self, pcodec_pred, batch_source, batch_label, save_root, evaluate=False):
         B = len(pcodec_pred) 
 
-        # rescale the predictions and labels back to normal
-        pcodec_pred = p_codec_scale(pcodec_pred, self.hparams.dataset_means, self.hparams.dataset_stds)
-        batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], self.hparams.dataset_means, self.hparams.dataset_stds)
-        batch_label['p_codec'] = p_codec_scale(batch_label['p_codec'], self.hparams.dataset_means, self.hparams.dataset_stds)
-
         fig, ax = plt.subplots(int(B/2), 4, figsize=(24, 3*B))
 
         tempo_vel_loss, tempo_vel_cor = 0, 0
@@ -747,9 +733,56 @@ class CodecDiffusion(pl.LightningModule):
             tempo_vel_cor += tvc
             renderer.plot_curves(ax)
             if evaluate:
-                renderer.save_performance_features(save_source=True, save_label=True)
+                renderer.save_performance_features(save_source=self.hparams.transfer, save_label=True)
                 renderer.save_pf_distribution(pred_label=True)
             
         plt.savefig(f"{save_root}/tempo_curves.png") 
 
         return fig, tempo_vel_loss / B, tempo_vel_cor / B
+
+
+    def set_predict_start(self, batch_source, batch_label, c_config=""):
+        """set up the starting point of inference given the configuration. 
+    
+        - transfer in training: start from source codec, conditioned on label c_codec - source c_codec
+        - transfer in inference: starting from source codec + noise (75%), conditioned on label c_codec
+        - no transfer: starting from noise, conditioned on label c_codec [or other adjustable c_codec]
+
+        c_config: "melodiousness_more", changes to the 
+        """
+        batch_source_codec = batch_source['p_codec']
+        batch_source_codec = batch_source_codec.unsqueeze(1)  # (B, 1, T, F)
+
+        sample_steps = self.hparams.timesteps - 1 
+        c_codec = batch_label['c_codec'] 
+
+        if "transfer" not in self.hparams.training.target: # pure noise 
+            noise = torch.randn_like(batch_source_codec)
+
+            if self.hparams.transfer: # only transfer in inference
+                sample_steps = int((self.hparams.timesteps - 1) * self.hparams.sample_steps_frac) # steps for noisify the source
+                start_noise = q_sample(x_start=batch_source_codec,
+                                    t=torch.tensor([sample_steps] * int(batch_source['p_codec'].shape[0])),
+                                    sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
+                                    sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
+                                    noise=noise)
+                if c_config != "":
+                    c, control = c_config.split("/")
+                    c_idx = self.c_type.index(c)
+                    c_codec[c_idx] *= (2 if control == "more" else 0.5)
+            else:
+                start_noise = None
+
+        else: # transfer in training
+            start_noise = batch_source_codec
+            c_codec = batch_label['c_codec'] - batch_source['c_codec']
+
+        return start_noise, sample_steps, c_codec
+
+    def set_eval_c_config(self):
+        if self.hparams.condition_eval:
+            self.c_type = ["melodiousness", "articulation", "rhythm complexity", "rhythm stability", "dissonance", "tonal stability", "minorness"]
+            c_configs = [f"{c}_{control}" for c in self.c_type for control in ["less", "more"]]
+        else:
+            c_configs = [""]
+        return c_configs

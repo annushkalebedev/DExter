@@ -24,8 +24,8 @@ import hook
 
 def eval_renderer(cfg, val_loader):
     """run the evaluation set on other renderer for comparison
-    - Basis Mixer
-    - ScorePerformer
+    - Basis Mixer: render the passage 
+    - ScorePerformer: save generated performances from their colab and match (since they use ASAP as well)
     """
 
     
@@ -54,12 +54,11 @@ def eval_renderer(cfg, val_loader):
                     # generate evaluation file
                     renderer = Renderer(mid_out_dir)
                     renderer.load_external_performances(mid_out_path, batch['score_path'][idx], snote_ids,
-                                                        label_performance_path=lpp)
+                                                        label_performance_path=lpp, piece_name=piece_name)
                     renderer.save_performance_features()
                     renderer.save_pf_distribution()
-                    hook()
-    return 
-
+            if cfg.renderer == "scoreperformer":
+                pass
 
 
 @hydra.main(config_path="config", config_name="evaluate")

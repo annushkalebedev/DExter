@@ -9,17 +9,18 @@ data_root: '/import/c4dm-datasets-ext/DiffPerformer/'
 seg_len: 200
 pin_memory: True
 random_seed: 13
+condition_eval: True
 
 train_target: 'gen_noise' # 'gen_noise' or 'transfer' or 'gen_noise+transfer' or 'gen_null'
 
 test:
-    sample_steps_frac: 0.75
-    transfer: True
+    sample_steps_frac: 1
+    transfer: False
 
 dataloader:
     smoothed: False
     mixup: True
-    num_data: 160   # amount of samples for evaluation ~ 300 epochs
+    num_data: 160   # amount of samples for evaluation
     val:
         batch_size: 16
         num_workers: 4

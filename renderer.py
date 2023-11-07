@@ -43,12 +43,13 @@ class Renderer():
         self.idx = idx
         self.B = B
 
-    def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None):
+    def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None, piece_name=None):
         """load the performance that's already generated (for evaluating other models)"""
 
         self.performed_part = pt.load_performance(performance_path).performedparts[0]
         self.score = pt.load_score(score_path)
         self.snote_ids = snote_ids
+        self.piece_name = piece_name
         # unfold the score if necessary (mostly for ASAP)
         if ("-" in self.snote_ids[0] and 
             "-" not in self.score.note_array()['id'][0]):
@@ -57,9 +58,12 @@ class Renderer():
         if label_performance_path:
             self.performed_part_label = pt.load_performance(label_performance_path).performedparts[0]
 
-        self.alignment = [{'label': "match", "score_id": sid, "performance_id": f"n{i}"} for i, sid in enumerate(self.snote_ids)]
+        self.pnote_ids = [f"n{i}" for i in range(len(self.snote_ids))]
+        self.alignment = [{'label': "match", "score_id": sid, "performance_id": pid} for sid, pid in zip(self.snote_ids, self.pnote_ids)]
         self.pcodec_pred, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part, self.alignment)
         self.pcodec_label, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part_label, self.alignment)
+        self.N = min(len(self.pcodec_pred), len(self.pcodec_label))
+        self.pcodec_pred, self.pcodec_label = self.pcodec_pred[:self.N], self.pcodec_label[:self.N]
         self.compare_performance_curve(with_source=False)
 
 
@@ -69,7 +73,8 @@ class Renderer():
 
         self.pcodec_pred = self.parameters_to_performance_array(self.sampled_pcodec)
         self.pcodec_label = self.parameters_to_performance_array(self.label_data['p_codec'].cpu())
-        self.pcodec_source = self.parameters_to_performance_array(self.source_data['p_codec'].cpu())
+        if self.with_source:
+            self.pcodec_source = self.parameters_to_performance_array(self.source_data['p_codec'].cpu())
 
         try:
             # load the batch information and decode into performed parts
@@ -86,10 +91,10 @@ class Renderer():
             pt.save_performance_midi(self.performed_part, f"{self.save_root}/{self.idx}_{self.piece_name}.mid")
             if save_sourcelabel:
                 pt.save_performance_midi(self.performed_part_label, f"{self.save_root}/{self.idx}_{self.piece_name}_label.mid")
-                pt.save_performance_midi(self.performed_part_source, f"{self.save_root}/{self.idx}_{self.piece_name}_source.mid")
+                if self.with_source:
+                    pt.save_performance_midi(self.performed_part_source, f"{self.save_root}/{self.idx}_{self.piece_name}_source.mid")
         except Exception as e:
             print(e)
-
         return tempo_vel_loss, tempo_vel_cor
 
 
@@ -106,6 +111,7 @@ class Renderer():
         # update the snote_id_path to the new one
         snote_id_path = self.source_data['snote_id_path']
         self.snote_ids = np.load(snote_id_path)
+        self.pnote_ids = self.snote_ids
 
         if len(self.snote_ids) < 10: # when there is too few notes, the rendering would have problems.
             raise RuntimeError("snote_ids too short")
@@ -115,15 +121,16 @@ class Renderer():
             "-" not in self.score.note_array()['id'][0]):
             self.score = pt.score.unfold_part_maximal(pt.score.merge_parts(self.score.parts)) 
         self.piece_name = self.source_data['piece_name']
-        N = len(self.snote_ids)
+        self.N = len(self.snote_ids)
         
         pad_mask = np.full(self.snote_ids.shape, False)
-        self.performed_part = pt.musicanalysis.decode_performance(self.score, self.pcodec_pred[:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
-        self.performed_part_label = pt.musicanalysis.decode_performance(self.score, self.pcodec_label[:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
-        self.performed_part_source = pt.musicanalysis.decode_performance(self.score, self.pcodec_source[:N], snote_ids=self.snote_ids, pad_mask=pad_mask)
+        self.performed_part = pt.musicanalysis.decode_performance(self.score, self.pcodec_pred[:self.N], snote_ids=self.snote_ids, pad_mask=pad_mask)
+        self.performed_part_label = pt.musicanalysis.decode_performance(self.score, self.pcodec_label[:self.N], snote_ids=self.snote_ids, pad_mask=pad_mask)
+        if self.with_source:
+            self.performed_part_source = pt.musicanalysis.decode_performance(self.score, self.pcodec_source[:self.N], snote_ids=self.snote_ids, pad_mask=pad_mask)
 
 
-    def compare_performance_curve(self, with_source=True):
+    def compare_performance_curve(self, with_source=False):
         """compute the performance curve (tempo curve \ velocity curve) from given performance array
             pcodec_original: another parameter curve, coming from the optional starting point of transfer
 
@@ -146,8 +153,8 @@ class Renderer():
         self.onset_beats = np.unique(na['onset_beat'])
         res = [self.onset_beats]
         for pcodec in pcodecs:
-
-            joint_pcodec = rfn.merge_arrays([na, pcodec[:len(na)]], flatten = True, usemask = False)
+            N = min(len(na), len(pcodec))
+            joint_pcodec = rfn.merge_arrays([na[:N], pcodec[:N]], flatten = True, usemask = False)
             bp = [joint_pcodec[joint_pcodec['onset_beat'] == ob]['beat_period'].mean() for ob in self.onset_beats]
             vel = [joint_pcodec[joint_pcodec['onset_beat'] == ob]['velocity'].mean() for ob in self.onset_beats]
             tempo_curve_pred = interp1d(self.onset_beats, 60 / np.array(bp))
@@ -202,18 +209,20 @@ class Renderer():
             - Deviation of each parameter on note level (for articulation: drop the ones with mask?)
             - Distribution difference of each parameters using KL estimation.
         '''
-        alignment = [{'label': "match", "score_id": sid, "performance_id": sid} for sid in self.snote_ids]
+        alignment = [{'label': "match", "score_id": sid, "performance_id": pid} for sid, pid in zip(self.snote_ids, self.pnote_ids)]
 
         self.feats_pred, self.res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part, alignment, feature_functions='all')
         pd.DataFrame(self.feats_pred).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_pred.csv", index=False)
         self.feats_label, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part_label, alignment, feature_functions='all')
+
+        self.feats_pred, self.feats_label = self.feats_pred[:self.N], self.feats_label[:self.N]
 
         if save_source:
             self.feats_source, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part_source, alignment, feature_functions='all')
             pd.DataFrame(self.feats_source).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_source.csv", index=False)
 
         if save_label:
-            pd.DataFrame(self.feats_source).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_label.csv", index=False)
+            pd.DataFrame(self.feats_label).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_label.csv", index=False)
 
 
 

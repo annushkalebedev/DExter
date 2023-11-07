@@ -25,4 +25,5 @@ task:
       w: 1.2
   sample_steps_frac: ${test.sample_steps_frac}
   transfer: ${test.transfer}
+  condition_eval: ${condition_eval}
   valid_fraction: 0.01

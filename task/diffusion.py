@@ -731,11 +731,12 @@ class CodecDiffusion(pl.LightningModule):
             tvl, tvc = renderer.render_sample(save_sourcelabel=True)
             tempo_vel_loss += tvl 
             tempo_vel_cor += tvc
-            renderer.plot_curves(ax)
-            if evaluate:
-                renderer.save_performance_features(save_source=self.hparams.transfer, save_label=True)
-                renderer.save_pf_distribution(pred_label=True)
-            
+            if renderer.success:
+                renderer.plot_curves(ax)
+                if evaluate:
+                    renderer.save_performance_features(save_source=self.hparams.transfer, save_label=True)
+                    renderer.save_pf_distribution(pred_label=True)
+                
         plt.savefig(f"{save_root}/tempo_curves.png") 
 
         return fig, tempo_vel_loss / B, tempo_vel_cor / B
@@ -748,7 +749,7 @@ class CodecDiffusion(pl.LightningModule):
         - transfer in inference: starting from source codec + noise (75%), conditioned on label c_codec
         - no transfer: starting from noise, conditioned on label c_codec [or other adjustable c_codec]
 
-        c_config: "melodiousness_more", changes to the 
+        c_config: e.g. "melodiousness_more", changes the parameter by half or double
         """
         batch_source_codec = batch_source['p_codec']
         batch_source_codec = batch_source_codec.unsqueeze(1)  # (B, 1, T, F)
@@ -769,7 +770,10 @@ class CodecDiffusion(pl.LightningModule):
                 if c_config != "":
                     c, control = c_config.split("/")
                     c_idx = self.c_type.index(c)
-                    c_codec[c_idx] *= (2 if control == "more" else 0.5)
+                    if control == "more":
+                        c_codec[c_idx] *= 2
+                    if control == "less":
+                        c_codec[c_idx] *= 0.5 # normal is just itself
             else:
                 start_noise = None
 
@@ -780,9 +784,10 @@ class CodecDiffusion(pl.LightningModule):
         return start_noise, sample_steps, c_codec
 
     def set_eval_c_config(self):
+        # set the c_config for oracle evaluation
         if self.hparams.condition_eval:
             self.c_type = ["melodiousness", "articulation", "rhythm complexity", "rhythm stability", "dissonance", "tonal stability", "minorness"]
-            c_configs = [f"{c}_{control}" for c in self.c_type for control in ["less", "more"]]
+            c_configs = [f"{c}_{control}" for c in self.c_type for control in ["less", "normal", "more"]]
         else:
             c_configs = [""]
         return c_configs

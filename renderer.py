@@ -31,7 +31,7 @@ class Renderer():
                  source_data=None, label_data=None,
                  with_source=False,
                  means=None, stds=None,
-                 idx=0, B=16):
+                 idx=0, B=16, piece_name=""):
         
         self.save_root = save_root
         self.sampled_pcodec = sampled_pcodec
@@ -42,8 +42,10 @@ class Renderer():
         self.stds = stds
         self.idx = idx
         self.B = B
+        self.piece_name = piece_name
+        self.success = True
 
-    def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None, piece_name=None):
+    def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None, piece_name=None, save_seg=False):
         """load the performance that's already generated (for evaluating other models)"""
 
         self.performed_part = pt.load_performance(performance_path).performedparts[0]
@@ -66,6 +68,12 @@ class Renderer():
         self.pcodec_pred, self.pcodec_label = self.pcodec_pred[:self.N], self.pcodec_label[:self.N]
         self.compare_performance_curve(with_source=False)
 
+        if save_seg:
+            # in the case of scoreperformer renderer, need to hear the segment since the input is the entire piece.
+            performed_part = pt.musicanalysis.decode_performance(self.score, self.pcodec_pred[:self.N], snote_ids=self.snote_ids)     
+            os.makedirs(self.save_root, exist_ok=True)                                                                                                                                                                                             
+            pt.save_performance_midi(performed_part, f"{self.save_root}/{self.idx}_{self.piece_name}.mid")
+
 
     def render_sample(self, save_sourcelabel=False):
         """render the sample to midi file and save 
@@ -76,6 +84,7 @@ class Renderer():
         if self.with_source:
             self.pcodec_source = self.parameters_to_performance_array(self.source_data['p_codec'].cpu())
 
+        tempo_vel_loss, tempo_vel_cor = np.inf, -1
         try:
             # load the batch information and decode into performed parts
             self.load_and_decode()
@@ -94,7 +103,9 @@ class Renderer():
                 if self.with_source:
                     pt.save_performance_midi(self.performed_part_source, f"{self.save_root}/{self.idx}_{self.piece_name}_source.mid")
         except Exception as e:
+            self.success = False
             print(e)
+
         return tempo_vel_loss, tempo_vel_cor
 
 
@@ -126,8 +137,10 @@ class Renderer():
         pad_mask = np.full(self.snote_ids.shape, False)
         self.performed_part = pt.musicanalysis.decode_performance(self.score, self.pcodec_pred[:self.N], snote_ids=self.snote_ids, pad_mask=pad_mask)
         self.performed_part_label = pt.musicanalysis.decode_performance(self.score, self.pcodec_label[:self.N], snote_ids=self.snote_ids, pad_mask=pad_mask)
+        assert(len(self.performed_part_label.note_array()) == 200)
         if self.with_source:
             self.performed_part_source = pt.musicanalysis.decode_performance(self.score, self.pcodec_source[:self.N], snote_ids=self.snote_ids, pad_mask=pad_mask)
+            assert(len(self.performed_part_source.note_array()) == 200)
 
 
     def compare_performance_curve(self, with_source=False):
@@ -248,7 +261,7 @@ class Renderer():
 
         for feat_name in ['articulation_feature.kor',
                         'asynchrony_feature.pitch_cor',
-                        'asynchrony_feature.vel_cor',
+                        # 'asynchrony_feature.vel_cor',
                         'asynchrony_feature.delta',
                         'dynamics_feature.agreement',
                         'dynamics_feature.consistency_std',
@@ -278,6 +291,9 @@ class Renderer():
             mask: for the values that we don't want to look at. 
         """
         feat_1, feat_2 = feat_1[~mask], feat_2[~mask]
+        # also mask the nan value
+        nan_mask = np.isnan(feat_1)| np.isnan(feat_2)
+        feat_1, feat_2 = feat_1[~nan_mask], feat_2[~nan_mask]
 
         try:
             kde_1 = gaussian_kde(feat_1)
@@ -289,7 +305,7 @@ class Renderer():
             KL = -1   # null value since KL can't be negative                                                                                                                                                                                                                                                      
         
         return {
-            "label_dev(percent)": np.ma.masked_invalid((feat_1 - feat_2) / feat_2).mean(), # filter out the inf and nan
-            "pred-label(KL)": KL,
-            "pred-label(cor)": pearsonr(feat_1, feat_2)[0],
+            "Deviation": np.ma.masked_invalid((feat_1 - feat_2) / feat_2).mean(), # filter out the inf and nan
+            "KL divergence": KL,
+            "Correlation": pearsonr(feat_1, feat_2)[0],
         }

@@ -1,4 +1,4 @@
-renderer: "diff"  # "diff", "basismixer", "scoreperformer", "label"
+renderer: "diff"  # "diff", "basismixer", "scoreperformer"
 gpus: [0]
 epochs: 400
 learning_rate: 5e-5
@@ -9,7 +9,7 @@ data_root: '/import/c4dm-datasets-ext/DiffPerformer/'
 seg_len: 200
 pin_memory: True
 random_seed: 13
-condition_eval: True
+condition_eval: False
 
 train_target: 'gen_noise' # 'gen_noise' or 'transfer' or 'gen_noise+transfer' or 'gen_null'
 

@@ -1,6 +1,13 @@
+# DExter
+
+Code repository for DExter: a Diffusion-based Expressive performance generat(o)r, where we show samples of conditional and unconditioned rendering with perceptual-inspired features, as well as controlled ablation studies. The name also echos “dexterity”, one of the crucial qualities of human masters’ hands that enables the most fine-grained control over individual notes, which our models strive to achieve as well. 
+
+
+- __Demo__ : https://river-blackberry-7de.notion.site/DExter-Learning-and-Controlling-Performance-Expression-through-Diffusion-models-5ee49ab5db68402b883f2f288022661a?pvs=4 
 - __Wandb__: https://wandb.ai/huanz/DiffPerformer
 
 # Table of Content
+- [DExter](#dexter)
 - [Table of Content](#table-of-content)
 - [Installation](#installation)
 - [Dataset and Data processing](#dataset-and-data-processing)
@@ -9,6 +16,7 @@
 - [Training](#training)
   - [Supervised training with conditioning](#supervised-training-with-conditioning)
 - [Testing \& inference](#testing--inference)
+- [Evaluation](#evaluation)
 
 
 
@@ -101,4 +109,7 @@ During testing, the following will be generated / evaluated:
 - Animation of the predicted p_codec from noise
 - Tempo curve and velocity curve. If `WANDB_DISALBED=False` this will be uploaded to the wandb workspace. 
 - Comparison between the pred p_codec and label p_codec.
+
+
+# Evaluation
 

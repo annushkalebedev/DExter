@@ -31,6 +31,7 @@ def eval_renderer(cfg, val_loader):
     
     for batch_idx, batch in enumerate(val_loader):
 
+        # iterrate our batch. (since in pairs we only print one for the external renderers)
         for idx in range(0, cfg.dataloader.val.batch_size, 2): 
 
             snote_id_path = batch['snote_id_path'][idx]
@@ -39,26 +40,30 @@ def eval_renderer(cfg, val_loader):
                 continue
 
             piece_name = batch['piece_name'][idx]
-            
-            mid_out_dir = f"{cfg.task.samples_root}/EVAL-{cfg.renderer}/batch={batch_idx}/"
 
+            mid_out_dir = f"{cfg.task.samples_root}/EVAL-{cfg.renderer}/batch={batch_idx}/"
+            # load the saved label performance from the generation directory
+            lpp = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferFalse-ssfrac1-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/{idx}_{piece_name}_label.mid"
+            save_seg = False
             if cfg.renderer == 'basismixer':
-                mid_out_path = f"{mid_out_dir}/{idx}_{piece_name}.mid"
+                pred_mid_path = f"{mid_out_dir}/{idx}_{piece_name}.mid"
                 os.makedirs(mid_out_dir, exist_ok=True)
                 # already modified the original to only render the segment
-                os.system(f"python {cfg.renderer_path} {batch['score_path'][idx]} {mid_out_path} {batch['snote_id_path'][idx]}")
-
-                # load the saved label performance from the generation directory
-                lpp = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/{idx}_{piece_name}_label.mid"
-                if os.path.exists(mid_out_path):
-                    # generate evaluation file
-                    renderer = Renderer(mid_out_dir)
-                    renderer.load_external_performances(mid_out_path, batch['score_path'][idx], snote_ids,
-                                                        label_performance_path=lpp, piece_name=piece_name)
-                    renderer.save_performance_features()
-                    renderer.save_pf_distribution()
+                os.system(f"python {cfg.renderer_path} {batch['score_path'][idx]} {pred_mid_path} {batch['snote_id_path'][idx]}")
+            
             if cfg.renderer == "scoreperformer":
-                pass
+                # scoreperformer output are pre-computed from their colab 
+                save_seg = True
+                pred_mid_path = f"artifacts/samples/EVAL-scoreperformer/{piece_name}.midi"         
+
+
+            if os.path.exists(pred_mid_path) and os.path.exists(lpp):
+                # generate evaluation file
+                renderer = Renderer(mid_out_dir, idx=idx)
+                renderer.load_external_performances(pred_mid_path, batch['score_path'][idx], snote_ids,
+                                                    label_performance_path=lpp, piece_name=piece_name, save_seg=save_seg)
+                renderer.save_performance_features()
+                renderer.save_pf_distribution()
 
 
 @hydra.main(config_path="config", config_name="evaluate")
@@ -102,7 +107,10 @@ def main(cfg):
                 f"p={cfg.model.args.cond_dropout}-k={cfg.model.args.kernel_size}-" + \
                 f"dia={cfg.model.args.dilation_base}-{cfg.model.args.dilation_bound}"
 
-        name = "EVAL-" + name
+        if cfg.condition_eval:
+            name = "EVALo-" + name
+        else:
+            name = "EVAL-" + name
 
     
         wandb_logger = WandbLogger(project="DiffPerformer", name=name, save_code=True)   

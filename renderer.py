@@ -21,7 +21,7 @@ import hook
 class Renderer():
     """Renderer class that takes in one codec sample and convert to MIDI, and analyze.
 
-    - sampled_pcodec:  (B, L, 4)
+    - sampled_pcodec:  (B, L, 5)
     - source_data: dictionary contains {score, snote_id, piece_name...}
     - label_data: same with source data
 
@@ -38,12 +38,11 @@ class Renderer():
         self.source_data = source_data
         self.label_data = label_data
         self.with_source = with_source
-        self.means = means
-        self.stds = stds
         self.idx = idx
         self.B = B
         self.piece_name = piece_name
         self.success = True
+        self.gt_id = 0
 
     def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None, piece_name=None, save_seg=False):
         """load the performance that's already generated (for evaluating other models)"""
@@ -59,6 +58,7 @@ class Renderer():
         
         if label_performance_path:
             self.performed_part_label = pt.load_performance(label_performance_path).performedparts[0]
+            self.gt_id = label_performance_path.split("/")[-1].split("_")[0]
 
         self.pnote_ids = [f"n{i}" for i in range(len(self.snote_ids))]
         self.alignment = [{'label': "match", "score_id": sid, "performance_id": pid} for sid, pid in zip(self.snote_ids, self.pnote_ids)]
@@ -80,9 +80,9 @@ class Renderer():
         """
 
         self.pcodec_pred = self.parameters_to_performance_array(self.sampled_pcodec)
-        self.pcodec_label = self.parameters_to_performance_array(self.label_data['p_codec'].cpu())
+        self.pcodec_label = self.parameters_to_performance_array(self.label_data['p_codec'])
         if self.with_source:
-            self.pcodec_source = self.parameters_to_performance_array(self.source_data['p_codec'].cpu())
+            self.pcodec_source = self.parameters_to_performance_array(self.source_data['p_codec'])
 
         tempo_vel_loss, tempo_vel_cor = np.inf, -1
         try:
@@ -120,18 +120,18 @@ class Renderer():
             - piece_name
          """
         # update the snote_id_path to the new one
-        snote_id_path = self.source_data['snote_id_path']
+        snote_id_path = self.label_data['snote_id_path']
         self.snote_ids = np.load(snote_id_path)
         self.pnote_ids = self.snote_ids
 
         if len(self.snote_ids) < 10: # when there is too few notes, the rendering would have problems.
             raise RuntimeError("snote_ids too short")
-        self.score = pt.load_musicxml(self.source_data['score_path'], force_note_ids='keep')
+        self.score = pt.load_musicxml(self.label_data['score_path'], force_note_ids='keep')
         # unfold the score if necessary (mostly for ASAP)
         if ("-" in self.snote_ids[0] and 
             "-" not in self.score.note_array()['id'][0]):
             self.score = pt.score.unfold_part_maximal(pt.score.merge_parts(self.score.parts)) 
-        self.piece_name = self.source_data['piece_name']
+        self.piece_name = self.label_data['piece_name']
         self.N = len(self.snote_ids)
         
         pad_mask = np.full(self.snote_ids.shape, False)
@@ -278,7 +278,7 @@ class Renderer():
         features_distribution["tempo_curve"] = self.dev_kl_cor_estimate(tempo_1, tempo_2, mask=np.full(self.performed_tempo.shape, False))    
         features_distribution["vel_curve"] = self.dev_kl_cor_estimate(vel_1, vel_2, mask=np.full(self.performed_vel.shape, False))    
         self.features_distribution = pd.DataFrame(features_distribution)
-        self.features_distribution.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_{name}_distribution.csv", index=False)
+        self.features_distribution.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_{name}_distribution_{self.gt_id}.csv", index=False)
 
 
     def dev_kl_cor_estimate(self, feat_1, feat_2, 
@@ -304,8 +304,10 @@ class Renderer():
         except Exception as e:
             KL = -1   # null value since KL can't be negative                                                                                                                                                                                                                                                      
         
+        # cap the deviation by -5 and 5, as the ratio is very much dependent on the value of label.
+        deviation = max(min(np.ma.masked_invalid((feat_1 - feat_2) / feat_2).mean(), 5), -5)
         return {
-            "Deviation": np.ma.masked_invalid((feat_1 - feat_2) / feat_2).mean(), # filter out the inf and nan
+            "Deviation": deviation, # filter out the inf and nan
             "KL divergence": KL,
             "Correlation": pearsonr(feat_1, feat_2)[0],
         }

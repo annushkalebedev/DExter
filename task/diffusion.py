@@ -721,21 +721,19 @@ class CodecDiffusion(pl.LightningModule):
         for idx in range(B): 
             renderer = Renderer(save_root, 
                                 pcodec_pred[idx],  
-                                get_batch_slice(batch_source, idx), 
-                                get_batch_slice(batch_label, idx), 
+                                source_data=get_batch_slice(batch_source, idx), 
+                                label_data=get_batch_slice(batch_label, idx), 
                                 with_source=self.hparams.transfer,
-                                means=self.hparams.dataset_means,
-                                stds=self.hparams.dataset_stds,
                                 idx=idx, B=B)
             
-            tvl, tvc = renderer.render_sample(save_sourcelabel=True)
+            tvl, tvc = renderer.render_sample(save_sourcelabel=False)
             tempo_vel_loss += tvl 
             tempo_vel_cor += tvc
             if renderer.success:
                 renderer.plot_curves(ax)
                 if evaluate:
-                    renderer.save_performance_features(save_source=self.hparams.transfer, save_label=True)
-                    renderer.save_pf_distribution(pred_label=True)
+                    renderer.save_performance_features(save_source=self.hparams.transfer, save_label=False)
+                    renderer.save_pf_distribution()
                 
         plt.savefig(f"{save_root}/tempo_curves.png") 
 

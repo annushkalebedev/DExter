@@ -99,6 +99,18 @@ def load_transfer_pair(K=50000, N=200):
     return transfer_pairs, unpaired
 
 
+def group_same_seg(valid_set):
+    """Group all valid_set by segment, return a dictionary"""
+    valid_df = pd.DataFrame(valid_set)
+    # Group by 'grouptype' and collect indices
+    grouped_indices = valid_df.groupby("snote_id_path").apply(lambda group: list(group.index))
+    indices_dict = grouped_indices.to_dict()
+
+    indices_dict = {k.split("/")[-1][:-4]: v for k, v in indices_dict.items()}
+
+    # {"ASAP_Bach_Fugue_bwv_854_seg2": [23, 766], ...}
+    return indices_dict
+
 
 def plot_codec(codec1, codec2, ax0, ax1, fig):
     # plot the pred p_codec and label p_codec, on the given two axes

@@ -1,4 +1,5 @@
 import os, sys
+from collections import defaultdict
 import warnings
 warnings.filterwarnings("ignore")
 sys.path.insert(0, "../partitura")
@@ -27,14 +28,20 @@ def eval_renderer(cfg, val_loader):
     - Basis Mixer: render the passage 
     - ScorePerformer: save generated performances from their colab and match (since they use ASAP as well)
     """
-
     
+    sip_dict = defaultdict(bool) # keeping track of pieces so don't do repetitive computation.
+
     for batch_idx, batch in enumerate(val_loader):
 
         # iterrate our batch. (since in pairs we only print one for the external renderers)
         for idx in range(0, cfg.dataloader.val.batch_size, 2): 
 
             snote_id_path = batch['snote_id_path'][idx]
+
+            if sip_dict[snote_id_path]: 
+                continue
+            sip_dict[snote_id_path] = False
+
             snote_ids = np.load(snote_id_path)
             if len(snote_ids) < 10: # when there is too few notes, the rendering would have problems.
                 continue
@@ -42,12 +49,14 @@ def eval_renderer(cfg, val_loader):
             piece_name = batch['piece_name'][idx]
 
             mid_out_dir = f"{cfg.task.samples_root}/EVAL-{cfg.renderer}/batch={batch_idx}/"
-            # load the saved label performance from the generation directory
-            lpp = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferFalse-ssfrac1-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/{idx}_{piece_name}_label.mid"
+            os.makedirs(mid_out_dir, exist_ok=True)
+            # load multiple label performances to compare
+            snote_id_dir = snote_id_path.split("/")[-1][:-4]
+            lpps = glob.glob(f"artifacts/samples/GT/{snote_id_dir}/*.mid")
+
             save_seg = False
             if cfg.renderer == 'basismixer':
                 pred_mid_path = f"{mid_out_dir}/{idx}_{piece_name}.mid"
-                os.makedirs(mid_out_dir, exist_ok=True)
                 # already modified the original to only render the segment
                 os.system(f"python {cfg.renderer_path} {batch['score_path'][idx]} {pred_mid_path} {batch['snote_id_path'][idx]}")
             
@@ -56,14 +65,40 @@ def eval_renderer(cfg, val_loader):
                 save_seg = True
                 pred_mid_path = f"artifacts/samples/EVAL-scoreperformer/{piece_name}.midi"         
 
+            if cfg.renderer == "dexter":
+                # dexter was first rendered in testing step. But this step compare it with all GTs.
+                dexter_midiout_path = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferFalse-ssfrac1-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/"
+                pred_mid_path = f"{dexter_midiout_path}/{idx}_{piece_name}.mid"
 
-            if os.path.exists(pred_mid_path) and os.path.exists(lpp):
-                # generate evaluation file
-                renderer = Renderer(mid_out_dir, idx=idx)
-                renderer.load_external_performances(pred_mid_path, batch['score_path'][idx], snote_ids,
-                                                    label_performance_path=lpp, piece_name=piece_name, save_seg=save_seg)
+            for lpp in lpps:
+                if os.path.exists(pred_mid_path) and os.path.exists(lpp):
+                    # generate evaluation file
+                    renderer = Renderer(mid_out_dir, idx=idx)
+                    renderer.load_external_performances(pred_mid_path, batch['score_path'][idx], snote_ids,
+                                                        label_performance_path=lpp, piece_name=piece_name, save_seg=save_seg)
+                    renderer.save_performance_features()
+                    renderer.save_pf_distribution()
+
+
+def save_all_gt(cfg, valid_set, indices_dict):
+    """save all the segments of validation set ground truth. Grouped by piece seg. """
+
+    for sip, indices in indices_dict.items():
+        print(sip, indices)
+        if os.path.exists(f"{cfg.task.samples_root}/GT/{sip}"):
+            continue
+        os.makedirs(f"{cfg.task.samples_root}/GT/{sip}", exist_ok=True)
+        for idx in indices:
+            data = valid_set[idx]
+            try:
+                renderer = Renderer(f"{cfg.task.samples_root}/GT/{sip}", 
+                                    data['p_codec'],  
+                                    label_data=data,
+                                    idx=idx)
+                renderer.render_sample()
                 renderer.save_performance_features()
-                renderer.save_pf_distribution()
+            except Exception as e:
+                continue
 
 
 @hydra.main(config_path="config", config_name="evaluate")
@@ -80,7 +115,12 @@ def main(cfg):
     
     # load our data
     paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
-    train_set, valid_set = split_train_valid(paired, select_num=3000)
+    train_set, valid_set = split_train_valid(paired, 
+                                             select_num=3000
+                                             )
+    # indices_dict = group_same_seg(valid_set)
+    # save_all_gt(cfg, valid_set, indices_dict)
+    # hook()
     assert(len(train_set) % 2 == 0)
     assert(len(valid_set) % 2 == 0)   
     val_loader = DataLoader(valid_set, **cfg.dataloader.val)  

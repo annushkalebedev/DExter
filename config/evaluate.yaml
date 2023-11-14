@@ -20,7 +20,7 @@ test:
 dataloader:
     smoothed: False
     mixup: True
-    num_data: 160   # amount of samples for evaluation
+    num_data: 1600   # amount of samples for evaluation
     val:
         batch_size: 16
         num_workers: 4

@@ -18,3 +18,4 @@ model/diffwave_hyon.py
 sweep.yaml
 .gitignore
 .gitlab-ci.yml
+visualization.ipynb

@@ -31,11 +31,10 @@ def eval_renderer(cfg, val_loader):
     
     sip_dict = defaultdict(bool) # keeping track of pieces so don't do repetitive computation.
 
-    for batch_idx, batch in enumerate(val_loader):
+    for batch_idx, batch in tqdm(enumerate(val_loader)):
 
         # iterrate our batch. (since in pairs we only print one for the external renderers)
         for idx in range(0, cfg.dataloader.val.batch_size, 2): 
-
             snote_id_path = batch['snote_id_path'][idx]
 
             if sip_dict[snote_id_path]: 
@@ -45,16 +44,16 @@ def eval_renderer(cfg, val_loader):
             snote_ids = np.load(snote_id_path)
             if len(snote_ids) < 10: # when there is too few notes, the rendering would have problems.
                 continue
-
             piece_name = batch['piece_name'][idx]
 
             mid_out_dir = f"{cfg.task.samples_root}/EVAL-{cfg.renderer}/batch={batch_idx}/"
             os.makedirs(mid_out_dir, exist_ok=True)
+            
             # load multiple label performances to compare
             snote_id_dir = snote_id_path.split("/")[-1][:-4]
             lpps = glob.glob(f"artifacts/samples/GT/{snote_id_dir}/*.mid")
 
-            save_seg = False
+            save_seg, merge_tracks = False, False
             if cfg.renderer == 'basismixer':
                 pred_mid_path = f"{mid_out_dir}/{idx}_{piece_name}.mid"
                 # already modified the original to only render the segment
@@ -62,22 +61,36 @@ def eval_renderer(cfg, val_loader):
             
             if cfg.renderer == "scoreperformer":
                 # scoreperformer output are pre-computed from their colab 
+                save_seg, merge_tracks = True, True
+                pred_mid_path = f"artifacts/samples/EVAL-scoreperformer/{piece_name}.midi" 
+                # if os.path.exists(f"{mid_out_dir}/{idx}_{piece_name}.mid"): # don't compute the existing ones.
+                #     continue     
+
+            if cfg.renderer == "virtuosonet":
+                # virtuosonet output are pre-computed from running their repository
                 save_seg = True
-                pred_mid_path = f"artifacts/samples/EVAL-scoreperformer/{piece_name}.midi"         
+                pred_mid_path = f"artifacts/samples/EVAL-virtuosonet/{piece_name}.mid" 
+                if os.path.exists(f"{mid_out_dir}/{idx}_{piece_name}.mid"): # don't compute the existing ones.
+                    continue  
 
             if cfg.renderer == "dexter":
                 # dexter was first rendered in testing step. But this step compare it with all GTs.
                 dexter_midiout_path = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferFalse-ssfrac1-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/"
                 pred_mid_path = f"{dexter_midiout_path}/{idx}_{piece_name}.mid"
+                if os.path.exists(f"{mid_out_dir}/{idx}_{piece_name}_feats_pred.csv"): # don't compute the existing ones.
+                    continue    
 
             for lpp in lpps:
                 if os.path.exists(pred_mid_path) and os.path.exists(lpp):
-                    # generate evaluation file
-                    renderer = Renderer(mid_out_dir, idx=idx)
-                    renderer.load_external_performances(pred_mid_path, batch['score_path'][idx], snote_ids,
-                                                        label_performance_path=lpp, piece_name=piece_name, save_seg=save_seg)
-                    renderer.save_performance_features()
-                    renderer.save_pf_distribution()
+                    try:
+                        # generate evaluation file
+                        renderer = Renderer(mid_out_dir, idx=idx)
+                        renderer.load_external_performances(pred_mid_path, batch['score_path'][idx], snote_ids,
+                                                            label_performance_path=lpp, piece_name=piece_name, save_seg=save_seg, merge_tracks=merge_tracks)
+                        renderer.save_performance_features()
+                        renderer.save_pf_distribution()
+                    except Exception as e:
+                        print(e)
 
 
 def save_all_gt(cfg, valid_set, indices_dict):

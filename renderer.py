@@ -44,10 +44,10 @@ class Renderer():
         self.success = True
         self.gt_id = 0
 
-    def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None, piece_name=None, save_seg=False):
+    def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None, piece_name=None, save_seg=False, merge_tracks=False):
         """load the performance that's already generated (for evaluating other models)"""
 
-        self.performed_part = pt.load_performance(performance_path).performedparts[0]
+        self.performed_part = pt.load_performance(performance_path, merge_tracks=merge_tracks).performedparts[0]
         self.score = pt.load_score(score_path)
         self.snote_ids = snote_ids
         self.piece_name = piece_name
@@ -70,7 +70,7 @@ class Renderer():
 
         if save_seg:
             # in the case of scoreperformer renderer, need to hear the segment since the input is the entire piece.
-            performed_part = pt.musicanalysis.decode_performance(self.score, self.pcodec_pred[:self.N], snote_ids=self.snote_ids)     
+            performed_part = pt.musicanalysis.decode_performance(self.score, self.pcodec_pred, snote_ids=self.snote_ids)     
             os.makedirs(self.save_root, exist_ok=True)                                                                                                                                                                                             
             pt.save_performance_midi(performed_part, f"{self.save_root}/{self.idx}_{self.piece_name}.mid")
 
@@ -275,6 +275,8 @@ class Renderer():
                 mask = self.res['no_kor_mask']
             features_distribution[feat_name] = self.dev_kl_cor_estimate(feat_1[feat_name], feat_2[feat_name], mask=mask)
 
+        # clip the tempo curve in range before computing deviation. 
+        tempo_1, tempo_2 = np.clip(tempo_1, 15, 480), np.clip(tempo_2, 15, 480)
         features_distribution["tempo_curve"] = self.dev_kl_cor_estimate(tempo_1, tempo_2, mask=np.full(self.performed_tempo.shape, False))    
         features_distribution["vel_curve"] = self.dev_kl_cor_estimate(vel_1, vel_2, mask=np.full(self.performed_vel.shape, False))    
         self.features_distribution = pd.DataFrame(features_distribution)
@@ -306,8 +308,10 @@ class Renderer():
         
         # cap the deviation by -5 and 5, as the ratio is very much dependent on the value of label.
         deviation = max(min(np.ma.masked_invalid((feat_1 - feat_2) / feat_2).mean(), 5), -5)
+
         return {
             "Deviation": deviation, # filter out the inf and nan
             "KL divergence": KL,
             "Correlation": pearsonr(feat_1, feat_2)[0],
         }
+    

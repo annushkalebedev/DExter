@@ -1,4 +1,4 @@
-renderer: "diff"  # "diff", "basismixer", "scoreperformer"
+renderer: "diff"  # "diff", "basismixer", "scoreperformer", "virtuosonet"
 gpus: [0]
 epochs: 400
 learning_rate: 5e-5

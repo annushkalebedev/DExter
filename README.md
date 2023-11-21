@@ -1,13 +1,13 @@
-# DExter
+# DExter: Learning and Controlling Performance Expression with Diffusion Models
 
 Code repository for DExter: a Diffusion-based Expressive performance generat(o)r, where we show samples of conditional and unconditioned rendering with perceptual-inspired features, as well as controlled ablation studies. The name also echos “dexterity”, one of the crucial qualities of human masters’ hands that enables the most fine-grained control over individual notes, which our models strive to achieve as well. 
 
 
 - __Demo__ : https://river-blackberry-7de.notion.site/DExter-Learning-and-Controlling-Performance-Expression-through-Diffusion-models-5ee49ab5db68402b883f2f288022661a?pvs=4 
-- __Wandb__: https://wandb.ai/huanz/DiffPerformer
+<!-- - __Wandb__: https://wandb.ai/huanz/DiffPerformer -->
 
 # Table of Content
-- [DExter](#dexter)
+- [DExter: Learning and Controlling Performance Expression with Diffusion Models](#dexter-learning-and-controlling-performance-expression-with-diffusion-models)
 - [Table of Content](#table-of-content)
 - [Installation](#installation)
 - [Dataset and Data processing](#dataset-and-data-processing)
@@ -113,3 +113,15 @@ During testing, the following will be generated / evaluated:
 
 # Evaluation
 
+For the full list of 
+
+```
+python train.py gpus=[0] --renderer='gen_noise'
+```
+
+- `renderer` sets which GPU to use. `gpus=[k]` means `device='cuda:k'`, `gpus=2` means [DistributedDataParallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html) (DDP) is used with two GPUs.
+- For a full list of parameters please refer to `evaluate.yaml`.
+
+
+
+<!-- # Render your own piece? -->

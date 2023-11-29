@@ -726,13 +726,13 @@ class CodecDiffusion(pl.LightningModule):
                                 with_source=self.hparams.transfer,
                                 idx=idx, B=B)
             
-            tvl, tvc = renderer.render_sample(save_sourcelabel=False)
+            tvl, tvc = renderer.render_sample(save_sourcelabel=True)
             tempo_vel_loss += tvl 
             tempo_vel_cor += tvc
             if renderer.success:
                 renderer.plot_curves(ax)
                 if evaluate:
-                    renderer.save_performance_features(save_source=self.hparams.transfer, save_label=False)
+                    renderer.save_performance_features(save_source=False, save_label=False)
                     renderer.save_pf_distribution()
                 
         plt.savefig(f"{save_root}/tempo_curves.png") 

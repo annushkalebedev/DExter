@@ -70,15 +70,37 @@ def eval_renderer(cfg, val_loader):
                 # virtuosonet output are pre-computed from running their repository
                 save_seg = True
                 pred_mid_path = f"artifacts/samples/EVAL-virtuosonet/{piece_name}.mid" 
-                if os.path.exists(f"{mid_out_dir}/{idx}_{piece_name}.mid"): # don't compute the existing ones.
-                    continue  
+                # if os.path.exists(f"{mid_out_dir}/{idx}_{piece_name}.mid"): # don't compute the existing ones.
+                #     continue  
 
             if cfg.renderer == "dexter":
                 # dexter was first rendered in testing step. But this step compare it with all GTs.
                 dexter_midiout_path = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferFalse-ssfrac1-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/"
                 pred_mid_path = f"{dexter_midiout_path}/{idx}_{piece_name}.mid"
-                if os.path.exists(f"{mid_out_dir}/{idx}_{piece_name}_feats_pred.csv"): # don't compute the existing ones.
-                    continue    
+                # if os.path.exists(f"{mid_out_dir}/{idx}_{piece_name}_feats_pred.csv"): # don't compute the existing ones.
+                #     continue    
+
+            if cfg.renderer == "dexter1":
+                # dexter was first rendered in testing step. But this step compare it with all GTs.
+                dexter_midiout_path = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac1-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/"
+                pred_mid_path = f"{dexter_midiout_path}/{idx}_{piece_name}.mid"
+
+            if cfg.renderer == "dexter34":
+                # dexter was first rendered in testing step. But this step compare it with all GTs.
+                dexter_midiout_path = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.75-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/"
+                pred_mid_path = f"{dexter_midiout_path}/{idx}_{piece_name}.mid"
+
+            if cfg.renderer == "dexter12":
+                # dexter was first rendered in testing step. But this step compare it with all GTs.
+                dexter_midiout_path = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.5-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/"
+                pred_mid_path = f"{dexter_midiout_path}/{idx}_{piece_name}.mid"
+
+ 
+            if cfg.renderer == "dexter14":
+                # dexter was first rendered in testing step. But this step compare it with all GTs.
+                dexter_midiout_path = f"artifacts/samples/EVAL-targetgen_noise-lw11111-len200-beta0.02-steps1000-epsilon-TransferTrue-ssfrac0.25-L12-C768-cfdg_ddpm-w=1.2-p=0.1-k=3-dia=2-4/epoch=0/batch={batch_idx}/"
+                pred_mid_path = f"{dexter_midiout_path}/{idx}_{piece_name}.mid"
+
 
             for lpp in lpps:
                 if os.path.exists(pred_mid_path) and os.path.exists(lpp):
@@ -91,27 +113,46 @@ def eval_renderer(cfg, val_loader):
                         renderer.save_pf_distribution()
                     except Exception as e:
                         print(e)
+            # compute the distribution in regards to the overall GT space.
+            try:
+                renderer.save_pf_distribution(gt_space=f"artifacts/samples/GT/{snote_id_dir}")
+            except Exception as e:
+                print(e)            
+        
 
 
 def save_all_gt(cfg, valid_set, indices_dict):
     """save all the segments of validation set ground truth. Grouped by piece seg. """
 
-    for sip, indices in indices_dict.items():
+    for sip, indices in tqdm(indices_dict.items()):
         print(sip, indices)
         if os.path.exists(f"{cfg.task.samples_root}/GT/{sip}"):
             continue
-        os.makedirs(f"{cfg.task.samples_root}/GT/{sip}", exist_ok=True)
-        for idx in indices:
-            data = valid_set[idx]
+        if not os.path.exists(f"{cfg.task.samples_root}/GT/{sip}"):
+            os.makedirs(f"{cfg.task.samples_root}/GT/{sip}", exist_ok=True)
+            for idx in indices:
+                data = valid_set[idx]
+                try:
+                    renderer = Renderer(f"{cfg.task.samples_root}/GT/{sip}", 
+                                        data['p_codec'],  
+                                        label_data=data,
+                                        idx=idx)
+                    renderer.render_sample()
+                    renderer.save_performance_features()
+                except Exception as e:
+                    print(e)
+                    continue
+        # get the mean and std of all versions of human performances. as well as concatenation
+        for typename in ['feats_pred', 'tv_feats']:
             try:
-                renderer = Renderer(f"{cfg.task.samples_root}/GT/{sip}", 
-                                    data['p_codec'],  
-                                    label_data=data,
-                                    idx=idx)
-                renderer.render_sample()
-                renderer.save_performance_features()
-            except Exception as e:
-                continue
+                csvs = glob.glob(f"{cfg.task.samples_root}/GT/{sip}/*_{typename}.csv")
+                tables = pd.concat([pd.read_csv(c) for c in csvs])
+                tables_group = tables.groupby(level=0)
+                tables_group.mean().to_csv(f"{cfg.task.samples_root}/GT/{sip}/{typename}_mean.csv", index=False)
+                tables_group.std().to_csv(f"{cfg.task.samples_root}/GT/{sip}/{typename}_std.csv", index=False)
+                tables.to_csv(f"{cfg.task.samples_root}/GT/{sip}/{typename}_all.csv", index=False)
+            except:
+                print(sip)
 
 
 @hydra.main(config_path="config", config_name="evaluate")

@@ -160,9 +160,9 @@ class ResidualBlockwithFilm(nn.Module):
         else:
             conditioner = self.conditioner_projection(conditioner)
             y = self.dilated_conv(y) + conditioner
-        
-        # Insert FiLM conditions; beta and gammas for each residual layer. 
-        y = y*gamma[:, None, None]  + beta[:, None, None] 
+
+            # Insert FiLM conditions; beta and gammas for each residual layer. 
+            y = y*gamma[:, None, None]  + beta[:, None, None] 
 
         gate, filter = torch.chunk(y, 2, dim=1)
         y = torch.sigmoid(gate) * torch.tanh(filter)
@@ -318,7 +318,7 @@ class ClassifierFreeDenoiser(CodecDiffusion):
             x, skip_connection = layer(x, diffusion_step, gamma, beta, s_codec)
             skip = skip_connection if skip is None else skip_connection + skip
 
-        x = skip / sqrt(len(self.residual_layers)) # what does this do??
+        x = skip / sqrt(len(self.residual_layers)) 
         x = self.skip_projection(x) # (B, 512, LEN)
         x = F.relu(x)
         x = self.output_projection(x) # (B, 4, LEN)

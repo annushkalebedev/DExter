@@ -66,7 +66,7 @@ class Renderer():
         self.pcodec_label, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part_label, self.alignment)
         self.N = min(len(self.pcodec_pred), len(self.pcodec_label))
         self.pcodec_pred, self.pcodec_label = self.pcodec_pred[:self.N], self.pcodec_label[:self.N]
-        self.compare_performance_curve(with_source=False)
+        self.compare_performance_curve()
 
         if save_seg:
             # in the case of scoreperformer renderer, need to hear the segment since the input is the entire piece.
@@ -143,7 +143,7 @@ class Renderer():
             assert(len(self.performed_part_source.note_array()) == 200)
 
 
-    def compare_performance_curve(self, with_source=False):
+    def compare_performance_curve(self):
         """compute the performance curve (tempo curve \ velocity curve) from given performance array
             pcodec_original: another parameter curve, coming from the optional starting point of transfer
 
@@ -160,7 +160,7 @@ class Renderer():
         na = na[np.in1d(na['id'], self.snote_ids)]
 
         pcodecs = [self.pcodec_pred, self.pcodec_label]
-        if with_source:
+        if self.with_source:
             pcodecs.append(self.pcodec_source)
 
         self.onset_beats = np.unique(na['onset_beat'])
@@ -176,10 +176,14 @@ class Renderer():
                 raise RuntimeError("inf in tempo")
             res.extend([tempo_curve, velocity_curve])
 
-        if with_source:
+        if self.with_source:
             _, self.performed_tempo, self.performed_vel, self.label_tempo, self.label_vel, self.source_tempo, self.source_vel = res
+            self.tv_source_feats = pd.DataFrame({"onset_beats": self.onset_beats, "performed_tempo": self.source_tempo, "performed_vel": self.source_vel})
         else:
             _, self.performed_tempo, self.performed_vel, self.label_tempo, self.label_vel = res
+
+        self.tv_feats = pd.DataFrame({"onset_beats": self.onset_beats, "performed_tempo": self.performed_tempo, "performed_vel": self.performed_vel})
+        self.tv_label_feats = pd.DataFrame({"onset_beats": self.onset_beats, "performed_tempo": self.label_tempo, "performed_vel": self.label_vel})
 
 
     def plot_curves(self, ax):
@@ -224,22 +228,24 @@ class Renderer():
         '''
         alignment = [{'label': "match", "score_id": sid, "performance_id": pid} for sid, pid in zip(self.snote_ids, self.pnote_ids)]
 
-        self.feats_pred, self.res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part, alignment, feature_functions='all')
+        self.feats_pred, self.res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part, alignment, feature_functions='all')        
         pd.DataFrame(self.feats_pred).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_pred.csv", index=False)
+        self.tv_feats.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_tv_feats.csv", index=False)
         self.feats_label, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part_label, alignment, feature_functions='all')
-
         self.feats_pred, self.feats_label = self.feats_pred[:self.N], self.feats_label[:self.N]
 
         if save_source:
             self.feats_source, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part_source, alignment, feature_functions='all')
             pd.DataFrame(self.feats_source).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_source.csv", index=False)
+            self.tv_label_feats.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_label_tv_feats.csv", index=False)
 
         if save_label:
             pd.DataFrame(self.feats_label).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_label.csv", index=False)
+            self.tv_source_feats.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_source_tv_feats.csv", index=False)
 
 
 
-    def save_pf_distribution(self, pred_label=True, pred_source=False, label_source=False):
+    def save_pf_distribution(self, pred_label=True, pred_source=False, label_source=False, gt_space=None):
         """compare distributions of the performance features, default is comparing the prediction & label
 
         pre-requisite:
@@ -249,6 +255,7 @@ class Renderer():
         """
         features_distribution = {}
 
+        tempo_3, vel_3, tempo_4, vel_4 = None, None, None, None
         if pred_label:
             feat_1, feat_2, tempo_1, tempo_2, vel_1, vel_2 = self.feats_pred, self.feats_label, self.performed_tempo, self.label_tempo, self.performed_vel, self.label_vel
             name = "pred_label"
@@ -258,6 +265,13 @@ class Renderer():
         if label_source:
             feat_1, feat_2, tempo_1, tempo_2, vel_1, vel_2 = self.feats_label, self.feats_source, self.label_tempo, self.source_tempo, self.label_vel, self.source_vel
             name = "label_source"
+        if type(gt_space) != type(None):
+            feat_2, feat_3, label_tv, label_tv_ = pd.read_csv(f"{gt_space}/feats_pred_mean.csv"), pd.read_csv(f"{gt_space}/feats_pred_std.csv"), pd.read_csv(f"{gt_space}/tv_feats_mean.csv"), pd.read_csv(f"{gt_space}/tv_feats_std.csv")
+            tempo_2, vel_2, tempo_3, vel_3 = label_tv['performed_tempo'], label_tv['performed_vel'], label_tv_['performed_tempo'], label_tv_['performed_vel']
+            feat_4, label_tv = pd.read_csv(f"{gt_space}/feats_pred_all.csv"), pd.read_csv(f"{gt_space}/tv_feats_all.csv")
+            tempo_4, vel_4 = label_tv['performed_tempo'], label_tv['performed_vel']
+            name = "pred_GTs"     
+            self.gt_id = "all"       
 
         for feat_name in ['articulation_feature.kor',
                         'asynchrony_feature.pitch_cor',
@@ -273,17 +287,21 @@ class Renderer():
             mask = np.full(self.res['no_kor_mask'].shape, False)
             if 'kor' in feat_name:
                 mask = self.res['no_kor_mask']
-            features_distribution[feat_name] = self.dev_kl_cor_estimate(feat_1[feat_name], feat_2[feat_name], mask=mask)
+            if type(gt_space) != type(None):
+                features_distribution[feat_name] = self.dev_kl_cor_estimate(feat_1[feat_name], feat_2[feat_name], feat_3=feat_3[feat_name], feat_4=feat_4[feat_name], mask=mask)
+            else:
+                features_distribution[feat_name] = self.dev_kl_cor_estimate(feat_1[feat_name], feat_2[feat_name], mask=mask)
 
         # clip the tempo curve in range before computing deviation. 
         tempo_1, tempo_2 = np.clip(tempo_1, 15, 480), np.clip(tempo_2, 15, 480)
-        features_distribution["tempo_curve"] = self.dev_kl_cor_estimate(tempo_1, tempo_2, mask=np.full(self.performed_tempo.shape, False))    
-        features_distribution["vel_curve"] = self.dev_kl_cor_estimate(vel_1, vel_2, mask=np.full(self.performed_vel.shape, False))    
+        features_distribution["tempo_curve"] = self.dev_kl_cor_estimate(tempo_1, tempo_2, feat_3=tempo_3, feat_4=tempo_4, mask=np.full(self.performed_tempo.shape, False))    
+        features_distribution["vel_curve"] = self.dev_kl_cor_estimate(vel_1, vel_2, feat_3=vel_3, feat_4=vel_4, mask=np.full(self.performed_vel.shape, False))    
         self.features_distribution = pd.DataFrame(features_distribution)
         self.features_distribution.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_{name}_distribution_{self.gt_id}.csv", index=False)
+        
 
 
-    def dev_kl_cor_estimate(self, feat_1, feat_2, 
+    def dev_kl_cor_estimate(self, feat_1, feat_2, feat_3=None, feat_4=None,
                         N=300, mask=None):
         """
             dev: deviation between the prediction and the target / source we want to compare with.
@@ -291,6 +309,7 @@ class Renderer():
             cor: correlation between the two compared series
 
             mask: for the values that we don't want to look at. 
+            feat_3: ground truth std in the case of looking at GT space
         """
         feat_1, feat_2 = feat_1[~mask], feat_2[~mask]
         # also mask the nan value
@@ -299,15 +318,24 @@ class Renderer():
 
         try:
             kde_1 = gaussian_kde(feat_1)
-            kde_label = gaussian_kde(feat_2)
+            if type(feat_4) != type(None):
+                kde_label = gaussian_kde(feat_4)
+            else:
+                kde_label = gaussian_kde(feat_2)
 
             pred_points = kde_1.resample(N) 
             KL = entropy(kde_1.pdf(pred_points), kde_label.pdf(pred_points))
         except Exception as e:
             KL = -1   # null value since KL can't be negative                                                                                                                                                                                                                                                      
         
-        # cap the deviation by -5 and 5, as the ratio is very much dependent on the value of label.
-        deviation = max(min(np.ma.masked_invalid((feat_1 - feat_2) / feat_2).mean(), 5), -5)
+        # if np.isinf(KL):
+        #     hook()
+
+        if type(feat_3) != type(None):
+            # cap the deviation by -5 and 5, as the ratio is very much dependent on the value of label.
+            deviation = max(min(np.ma.masked_invalid((feat_1 - feat_2) / feat_3).mean(), 5), -5)
+        else:
+            deviation = max(min(np.ma.masked_invalid((feat_1 - feat_2) / feat_2).mean(), 5), -5)
 
         return {
             "Deviation": deviation, # filter out the inf and nan

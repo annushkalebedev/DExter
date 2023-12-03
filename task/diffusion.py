@@ -265,7 +265,7 @@ class CodecDiffusion(pl.LightningModule):
         # sample a fraction (1 percent) of the testing set
         randgen = torch.rand(1)[0]
         if randgen <= self.hparams.valid_fraction:
-            sampled_loss, fig, tempo_vel_loss, tempo_vel_cor, _ = self.predict(batch, batch_idx)
+            sampled_loss, fig, tempo_vel_loss, tempo_vel_cor = self.predict(batch, batch_idx)
             
             self.logger.log_image(key=f"Val/tempo_curves", images=[fig])
             self.log(f"Val/sampled_loss", sampled_loss)

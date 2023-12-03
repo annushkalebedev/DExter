@@ -31,17 +31,21 @@ def main(cfg):
     torch.cuda.manual_seed(cfg.random_seed)
 
     cfg.data_root = to_absolute_path(cfg.data_root)
-    
     # load our data
     paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
     if cfg.train_target == "transfer": # load only from paired set. 
-        train_set, valid_set = split_train_valid(paired, select_num=0)
+        train_set, valid_set = split_train_valid(paired, select_num=0, paired_input=True)
         assert(len(train_set) % 2 == 0)
         assert(len(valid_set) % 2 == 0)   
         cfg.dataloader.train.shuffle = False
+
     else: # generation: keep 2000 pairs in validation but use unpaired for training.
-        # paired, unpaired = load_transfer_pair(K=2000, N=cfg.seg_len) 
-        train_set, valid_set = split_train_valid(paired)
+        # data = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup.npy", allow_pickle=True)
+        # train_set, valid_set = split_train_valid(data, paired_input=False)
+
+        train_set = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup_train.npy", allow_pickle=True)
+        valid_set = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup_test.npy", allow_pickle=True)
+
     train_set, valid_set = train_set[:500000], valid_set[:15000]
 
     # Normalize data
@@ -65,12 +69,17 @@ def main(cfg):
         model = getattr(Model, cfg.model.name)(**cfg.model.args, **cfg.task)
             
     lw = "".join(str(x) for x in cfg.task.loss_weight)
-    name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
-            f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
-            f"L{cfg.model.args.residual_layers}-C{cfg.model.args.residual_channels}-" + \
-            f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" + \
-            f"p={cfg.model.args.cond_dropout}-k={cfg.model.args.kernel_size}-" + \
-            f"dia={cfg.model.args.dilation_base}-{cfg.model.args.dilation_bound}"
+    if cfg.model.name == 'DenoiserUnet':
+        name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
+                f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
+                f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" 
+    else:
+        name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
+                f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
+                f"L{cfg.model.args.residual_layers}-C{cfg.model.args.residual_channels}-" + \
+                f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" + \
+                f"p={cfg.model.args.cond_dropout}-k={cfg.model.args.kernel_size}-" + \
+                f"dia={cfg.model.args.dilation_base}-{cfg.model.args.dilation_bound}"
 
     if cfg.test_only:
         name = "TEST-" + name

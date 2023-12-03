@@ -51,26 +51,38 @@ TESTING_GROUP = [
     'VIENNA422_Schubert_D783_no15_seg0.',    
 ]
 
-def split_train_valid(codec_data, select_num=58008):
+def split_train_valid(codec_data, select_num=58008, paired_input=False):
     """select the train and valid set according to the following criteria: 
         - ASAP and VIENNA422 goes to testing set as they are better ground truths
-        - split regarding to pieces.
+        - split regarding to pieces.(same score path)
     """
 
-    train_idx = int(len(codec_data) * 0.85) - 1
+    codec_data_ = codec_data[list(map(lambda x: not (("ATEPP" in x['score_path']) and ("musicxml_cleaned.musicxml" in x['score_path'])), codec_data))]
+    train_idx = int(len(codec_data_) * 0.85) 
     assert (train_idx % 2 == 0)
     if not select_num:
-        return codec_data[:train_idx], codec_data[train_idx:]
+        return codec_data_[:train_idx], codec_data_[train_idx:]
 
     selected_cd, unselected_cd = [], []
-    for idx in range(0, len(codec_data), 2):
-        if len(selected_cd) > select_num:  
-            break
-        cd, cd_ = codec_data[idx], codec_data[idx+1]
-        if "ATEPP" not in cd['snote_id_path']:
-            selected_cd.extend([cd, cd_])
-        else:
-            unselected_cd.extend([cd, cd_])
+
+    if paired_input:
+        for idx in range(0, len(codec_data), 2):
+            if len(selected_cd) > select_num:  
+                break
+            cd, cd_ = codec_data[idx], codec_data[idx+1]
+            if "ATEPP" not in cd['snote_id_path']:
+                selected_cd.extend([cd, cd_])
+            else:
+                unselected_cd.extend([cd, cd_])
+    else:
+        for idx in range(0, len(codec_data_)):
+            if len(selected_cd) > select_num:  
+                break
+            cd = codec_data_[idx]
+            if "ATEPP" not in cd['snote_id_path']:
+                selected_cd.extend([cd])
+            else:
+                unselected_cd.extend([cd])        
     
     # selected_cd, unselected_cd = defaultdict(list), []
     # for cd in codec_data:
@@ -84,8 +96,13 @@ def split_train_valid(codec_data, select_num=58008):
     
     # np.random.shuffle(unselected_cd)
     train_set = unselected_cd[:train_idx]
-    valid_set = selected_cd + unselected_cd[train_idx:]
+    valid_set = selected_cd
 
+    valid_set = np.array(valid_set)[list(map(lambda x: "mu" not in x['piece_name'], valid_set))]     
+
+    np.save(f"{BASE_DIR}/codec_N=200_mixup_train.npy", train_set)
+    np.save(f"{BASE_DIR}/codec_N=200_mixup_test.npy", valid_set)
+    hook()
     return train_set, valid_set
 
 def load_transfer_pair(K=50000, N=200):

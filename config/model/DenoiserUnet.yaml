@@ -1,0 +1,13 @@
+model:
+    name: 'DenoiserUnet'
+    args:
+        dim: 64
+        channels: 1
+        dim_mults:
+            - 1
+            - 2
+            - 4
+        p_codec_rows: 5
+        s_codec_rows: 4
+        c_codec_rows: 7
+        seg_len: ${seg_len}

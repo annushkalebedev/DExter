@@ -1,2 +1,2 @@
 from .diffwave import ClassifierFreeDenoiser
-from .unet import SpecUnet
+from .unet import DenoiserUnet

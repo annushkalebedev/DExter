@@ -170,7 +170,8 @@ def main(cfg):
     # load our data
     paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
     train_set, valid_set = split_train_valid(paired, 
-                                             select_num=3000
+                                             select_num=3000,
+                                             paired_input=True
                                              )
     # indices_dict = group_same_seg(valid_set)
     # save_all_gt(cfg, valid_set, indices_dict)

@@ -10,12 +10,13 @@ data_root: '/import/c4dm-datasets-ext/DiffPerformer/'
 seg_len: 200
 pin_memory: True
 random_seed: 13
+condition_eval: False
 
-train_target: 'transfer' # 'gen_noise' or 'transfer' or 'gen_noise+transfer' or 'gen_null'
+train_target: 'gen_noise' # 'gen_noise' or 'transfer' 
 
 test:
-    sample_steps_frac: 0.75
-    transfer: True
+    sample_steps_frac: 1
+    transfer: False
 
 dataloader:
     smoothed: False
@@ -30,7 +31,7 @@ dataloader:
     val:
         batch_size: 16
         num_workers: 4
-        shuffle: False
+        shuffle: True
         pin_memory: ${pin_memory}
         
         
@@ -52,7 +53,7 @@ modelcheckpoint:
 
 
 defaults:
-    - model: ClassifierFreeDenoiser
+    - model: ClassifierFreeDenoiser # DenoiserUnet or ClassifierFreeDenoiser
     - task: classifierfree_diffusion
 
 

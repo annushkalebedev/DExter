@@ -13,22 +13,6 @@ EPSILON = 1e-6
 def exists(x):
     return x is not None
 
-def align_timesteps(x1, x2):
-    """
-    x1 and x2 must be of the shape (B, C, T, F)
-    Then this function will discard the extra timestep
-    in either x1 or x2 such that they match in T dimension.
-    """
-    
-    T1 = x1.shape[2]
-    T2 = x2.shape[2]
-    
-    Tmin = min(T1, T2)
-    x1 = x1[:, :, :Tmin, :]
-    x2 = x2[:, :, :Tmin, :]
-    
-    return x1, x2
-
 def default(val, d):
     if exists(val):
         return val
@@ -319,7 +303,7 @@ class Unet(RollDiffusion):
         return x
     
     
-class SpecConvNextBlock(nn.Module):
+class CodecConvNextBlock(nn.Module):
     """https://arxiv.org/abs/2201.03545"""
 
     def __init__(self, dim, dim_out, *, time_emb_dim=None, mult=2, norm=True):
@@ -332,7 +316,7 @@ class SpecConvNextBlock(nn.Module):
 
         self.ds_conv = nn.Conv2d(dim, dim, 7, padding=3, groups=dim)
         
-        self.spec_ds_conv = nn.Conv2d(dim, dim, 7, padding=3, groups=dim)
+        self.cond_ds_conv = nn.Conv2d(dim, dim, 7, padding=3, groups=dim)
 
         self.net = nn.Sequential(
             nn.GroupNorm(1, dim) if norm else nn.Identity(),
@@ -342,7 +326,7 @@ class SpecConvNextBlock(nn.Module):
             nn.Conv2d(dim_out * mult, dim_out, 3, padding=1),
         )
         
-        self.spec_net = nn.Sequential(
+        self.cond_net = nn.Sequential(
             nn.GroupNorm(1, dim) if norm else nn.Identity(),
             nn.Conv2d(dim, dim_out * mult, 3, padding=1),
             nn.GELU(),
@@ -352,20 +336,20 @@ class SpecConvNextBlock(nn.Module):
 
         self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
-    def forward(self, x, spec, time_emb=None):
+    def forward(self, x, cond, time_emb=None):
         h = self.ds_conv(x)
-        spec_h = self.spec_ds_conv(spec)
+        cond_h = self.cond_ds_conv(cond)
         if exists(self.mlp) and exists(time_emb):
             assert exists(time_emb), "time embedding must be passed in"
-            condition = self.mlp(time_emb)
-            h = h + spec_h + rearrange(condition, "b c -> b c 1 1")
+            time = self.mlp(time_emb)
+            h = h + cond_h + rearrange(time, "b c -> b c 1 1")
 
         h = self.net(h)
-        spec_h = self.spec_net(spec_h)
-        return h + self.res_conv(x), spec_h
+        cond_h = self.cond_net(cond_h)
+        return h + self.res_conv(x), cond_h
     
     
-class SpecConvNextBlockUp(nn.Module):
+class CodecConvNextBlockUp(nn.Module):
     """https://arxiv.org/abs/2201.03545"""
 
     def __init__(self, dim, dim_out, *, time_emb_dim=None, mult=2, norm=True):
@@ -377,7 +361,7 @@ class SpecConvNextBlockUp(nn.Module):
         )
     
         self.ds_conv = nn.Conv2d(dim, dim, 7, padding=3, groups=dim)
-        self.spec_ds_conv = nn.Conv2d(dim//3, dim, 7, padding=3, groups=1)
+        self.cond_ds_conv = nn.Conv2d(dim//3, dim, 7, padding=3, groups=1)
 
         self.net = nn.Sequential(
             nn.GroupNorm(1, dim) if norm else nn.Identity(),
@@ -387,7 +371,7 @@ class SpecConvNextBlockUp(nn.Module):
             nn.Conv2d(dim_out * mult, dim_out, 3, padding=1),
         )
         
-        self.spec_net = nn.Sequential(
+        self.cond_net = nn.Sequential(
             nn.GroupNorm(1, dim) if norm else nn.Identity(),
             nn.Conv2d(dim, dim_out * mult, 3, padding=1),
             nn.GELU(),
@@ -397,24 +381,27 @@ class SpecConvNextBlockUp(nn.Module):
 
         self.res_conv = nn.Conv2d(dim, dim_out, 1) if dim != dim_out else nn.Identity()
 
-    def forward(self, x, spec, time_emb=None):
+    def forward(self, x, cond, time_emb=None):
         h = self.ds_conv(x)
-        spec_h = self.spec_ds_conv(spec)
+        cond_h = self.cond_ds_conv(cond)
         if exists(self.mlp) and exists(time_emb):
             assert exists(time_emb), "time embedding must be passed in"
             condition = self.mlp(time_emb)
-            h = h + spec_h + rearrange(condition, "b c -> b c 1 1")
+            h = h + cond_h + rearrange(condition, "b c -> b c 1 1")
 
         h = self.net(h)
-        spec_h = self.spec_net(spec_h)
-        return h + self.res_conv(x), spec_h    
+        cond_h = self.cond_net(cond_h)
+        return h + self.res_conv(x), cond_h    
   
     
-class SpecUnet(CodecDiffusion):
+class DenoiserUnet(CodecDiffusion):
     # Unet conditioned on spectrogram
     def __init__(
         self,
         dim,
+        p_codec_rows,
+        s_codec_rows,
+        c_codec_rows,
         init_dim=None,
         out_dim=None,
         dim_mults=(1, 2, 4, 8),
@@ -428,21 +415,20 @@ class SpecUnet(CodecDiffusion):
     ):
         super().__init__(**kwargs)
 
-        init_dim = default(init_dim, dim // 3 * 2)
+        init_dim = default(init_dim, dim) # 256
         self.init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
+        self.init_fc = nn.Linear(p_codec_rows, init_dim)
         
         # Initial layers for spectrograms
-        self.spec_init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
-        self.spec_init_fc = nn.Linear(spec_args.n_mels, 88)
+        self.condition_init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
+        self.condition_init_fc = nn.Linear(s_codec_rows, init_dim)
         
-        self.mel_layer = torchaudio.transforms.MelSpectrogram(**spec_args)
-
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
 
         if use_convnext:
-            block_klass = partial(SpecConvNextBlock, mult=convnext_mult)
-            up_block_klass = partial(SpecConvNextBlockUp, mult=convnext_mult)
+            block_klass = partial(CodecConvNextBlock, mult=convnext_mult)
+            up_block_klass = partial(CodecConvNextBlockUp, mult=convnext_mult)
         else:
             block_klass = partial(ResnetBlock, groups=resnet_block_groups)
 
@@ -463,8 +449,8 @@ class SpecUnet(CodecDiffusion):
         self.downs = nn.ModuleList([])
         self.ups = nn.ModuleList([])
         
-        self.spec_downs = nn.ModuleList([])
-        self.spec_ups = nn.ModuleList([])
+        self.condition_downs = nn.ModuleList([])
+        self.condition_ups = nn.ModuleList([])
         
         num_resolutions = len(in_out)
 
@@ -506,54 +492,58 @@ class SpecUnet(CodecDiffusion):
         out_dim = default(out_dim, channels)
         self.final_block = block_klass(dim, dim)
         self.final_conv = nn.Conv2d(dim, out_dim, 1)
+        self.final_fc = nn.Linear(dim, p_codec_rows)
         
 
 
-    def forward(self, x, waveform, time):
-        spec = self.mel_layer(waveform)
-        spec = spec.transpose(1,2) # (B, T, n_mels)
-        spec = torch.log(spec+EPSILON)
-        spec = spec.unsqueeze(1)
+    # def forward(self, x, waveform, diffusion_step):
+    def forward(self, x_t, s_codec, c_codec, diffusion_step, sampling=False):
+        """
+        x_t : (B, 1, T, N)
+        s_codec : (B, 4, N)
+        c_codec : (B, 7, N)
+        """
+
+        s_codec = rearrange(s_codec, "b w h -> b 1 w h")
+        s_codec = self.condition_init_conv(s_codec.float())  # (B, dim, N, 4)
+        s_codec = self.condition_init_fc(s_codec) # (B, dim, N, dim)
         
-        spec, x = align_timesteps(spec, x)
-        
-        spec = self.spec_init_conv(spec)
-        spec = self.spec_init_fc(spec)
-        
-        # x = (B, 1, dim, dim)       
-        x = self.init_conv(x) # (B, 18, dim, dim)
-        t = self.time_mlp(time) if exists(self.time_mlp) else None # (B, dim*4)
+        x_t = self.init_conv(x_t) # (B, dim, N, 5)
+        x_t = self.init_fc(x_t) # (B, dim, N, dim)
+        t = self.time_mlp(diffusion_step) if exists(self.time_mlp) else None # (B, dim*4)
         h = []
 
         # downsample
         counter = 0
-        for block1, block2, attn, downsample, spec_downsample in self.downs:
-            x, spec = block1(x, spec, t)
-            x, spec = block2(x, spec, t)
-            x = attn(x)
-            h.append([x, spec])
-            x = downsample(x)
-            spec = downsample(spec)
+        for block1, block2, attn, downsample, condition_downsample in self.downs:
+            x_t, s_codec = block1(x_t, s_codec, t)
+            x_t, s_codec = block2(x_t, s_codec, t)
+            x_t = attn(x_t)
+            h.append([x_t, s_codec])
+            x_t = downsample(x_t)
+            s_codec = condition_downsample(s_codec)
             counter += 1 
+
         # bottleneck
-        x, spec = self.mid_block1(x, spec, t)
-        x = self.mid_attn(x)
-        x, spec = self.mid_block2(x, spec, t)
+        x_t, s_codec = self.mid_block1(x_t, s_codec, t)
+        x_t = self.mid_attn(x_t)
+        x_t, s_codec = self.mid_block2(x_t, s_codec, t)
         
 
         # upsample
-        for block1, block2, attn, upsample, spec_upsample in self.ups:       
-            x = torch.cat((x, *h.pop()), dim=1)
-            x, spec = block1(x, spec, t)
-            x, spec = block2(x, spec, t)
-            x = attn(x)
-            x = upsample(x)
-            spec = spec_upsample(spec)
+        for block1, block2, attn, upsample, condition_upsample in self.ups:       
+            x_t = torch.cat((x_t, *h.pop()), dim=1)
+            x_t, s_codec = block1(x_t, s_codec, t)
+            x_t, s_codec = block2(x_t, s_codec, t)
+            x_t = attn(x_t)
+            x_t = upsample(x_t)
+            s_codec = condition_upsample(s_codec)
             
-        x, spec = self.final_block(x, spec)
-        x = self.final_conv(x)
+        x_t, s_codec = self.final_block(x_t, s_codec)
+        x_t = self.final_conv(x_t)
+        x_t = self.final_fc(x_t)
 
-        return x
+        return x_t, s_codec
     
 
 def cosine_beta_schedule(timesteps, s=0.008):

@@ -417,8 +417,8 @@ def make_transfer_pair(codec_data, K=50000, N=200):
     np.random.shuffle(transfer_pairs.T) 
     transfer_pairs = transfer_pairs.ravel(order='F')
     
-    np.save(f"{BASE_DIR}/codec_N={N}_mixup_paired_K={K}.npy", transfer_pairs)
-    np.save(f"{BASE_DIR}/codec_N={N}_mixup_unpaired_K={K}.npy", unpaired)
+    np.save(f"{BASE_DIR}/codec_N={N}_mixup_test_paired_K={K}.npy", transfer_pairs)
+    np.save(f"{BASE_DIR}/codec_N={N}_mixup_test_unpaired_K={K}.npy", unpaired)
     
     return transfer_pairs, unpaired
 
@@ -426,22 +426,22 @@ def make_transfer_pair(codec_data, K=50000, N=200):
 
 if __name__ == '__main__':
 
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('--compute_codec', action='store_true')
-    # parser.add_argument('--pairing', action='store_true')
-    # parser.add_argument('--MAX_NOTE_LEN', type=int, default=200, required=False)
-    # parser.add_argument('--K', type=int, default=2000, required=False)
-    # args = parser.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--compute_codec', action='store_true')
+    parser.add_argument('--pairing', action='store_true')
+    parser.add_argument('--MAX_NOTE_LEN', type=int, default=200, required=False)
+    parser.add_argument('--K', type=int, default=2000, required=False)
+    args = parser.parse_args()
 
-    # if args.compute_codec:
-    #     process_dataset_codec(args.MAX_NOTE_LEN, mix_up=True)
-    # elif args.pairing:
-    #     codec_data = np.load(f"{BASE_DIR}/codec_N={args.MAX_NOTE_LEN}_mixup.npy", allow_pickle=True) 
-    #     transfer_pairs, unpaired = make_transfer_pair(codec_data, K=args.K, N=args.MAX_NOTE_LEN)
-
+    if args.compute_codec:
+        process_dataset_codec(args.MAX_NOTE_LEN, mix_up=True)
+    elif args.pairing:
+        codec_data = np.load(f"{BASE_DIR}/codec_N={args.MAX_NOTE_LEN}_mixup_test.npy", allow_pickle=True) 
+        transfer_pairs, unpaired = make_transfer_pair(codec_data, K=args.K, N=args.MAX_NOTE_LEN)
+        hook()
     # codec_data_analysis()
 
-    from utils import parameters_to_performance_array
+    hook()
 
     plot_codec_list(codec_data[:1])
 

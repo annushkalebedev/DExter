@@ -265,9 +265,9 @@ class CodecDiffusion(pl.LightningModule):
         # sample a fraction (1 percent) of the testing set
         randgen = torch.rand(1)[0]
         if randgen <= self.hparams.valid_fraction:
-            sampled_loss, fig, tempo_vel_loss, tempo_vel_cor = self.predict(batch, batch_idx)
+            sampled_loss, tc_fig, tempo_vel_loss, tempo_vel_cor = self.predict(batch, batch_idx)
             
-            self.logger.log_image(key=f"Val/tempo_curves", images=[fig])
+            self.logger.log_image(key=f"Val/tempo_curves", images=[tc_fig])
             self.log(f"Val/sampled_loss", sampled_loss)
             self.log(f"Val/tempo_vel_loss", tempo_vel_loss)
             self.log(f"Val/tempo_vel_cor", tempo_vel_cor)
@@ -315,7 +315,7 @@ class CodecDiffusion(pl.LightningModule):
 
             tempo_vel_loss, tempo_vel_cor = 0, 0
             if len(pcodec_pred) % 2 != 1:
-                fig, tempo_vel_loss, tempo_vel_cor = self.render_batch(
+                tc_fig, tempo_vel_loss, tempo_vel_cor = self.render_batch(
                     pcodec_pred, batch_source, batch_label, save_root_, evaluate=evaluate)
 
         if save_animation:
@@ -349,7 +349,7 @@ class CodecDiffusion(pl.LightningModule):
 
         sampled_loss = self.p_losses(batch_label_codec, torch.tensor(pcodec_pred), loss_type='l2')
 
-        return sampled_loss, fig, tempo_vel_loss, tempo_vel_cor
+        return sampled_loss, tc_fig, tempo_vel_loss, tempo_vel_cor
         
         
     def step(self, batch, batch_idx):

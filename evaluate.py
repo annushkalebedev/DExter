@@ -33,8 +33,15 @@ def eval_renderer(cfg, val_loader):
 
     for batch_idx, batch in tqdm(enumerate(val_loader)):
 
+        if batch_idx == 0:
+            continue
+
         # iterrate our batch. (since in pairs we only print one for the external renderers)
         for idx in range(0, cfg.dataloader.val.batch_size, 2): 
+
+            if idx != 2:
+                continue
+
             snote_id_path = batch['snote_id_path'][idx]
 
             if sip_dict[snote_id_path]: 
@@ -104,15 +111,16 @@ def eval_renderer(cfg, val_loader):
 
             for lpp in lpps:
                 if os.path.exists(pred_mid_path) and os.path.exists(lpp):
-                    try:
+                    # try:
                         # generate evaluation file
                         renderer = Renderer(mid_out_dir, idx=idx)
                         renderer.load_external_performances(pred_mid_path, batch['score_path'][idx], snote_ids,
                                                             label_performance_path=lpp, piece_name=piece_name, save_seg=save_seg, merge_tracks=merge_tracks)
+                        
                         renderer.save_performance_features()
                         renderer.save_pf_distribution()
-                    except Exception as e:
-                        print(e)
+                    # except Exception as e:
+                    #     print(e)
             # compute the distribution in regards to the overall GT space.
             try:
                 renderer.save_pf_distribution(gt_space=f"artifacts/samples/GT/{snote_id_dir}")

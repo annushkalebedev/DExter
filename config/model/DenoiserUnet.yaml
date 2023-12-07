@@ -1,7 +1,7 @@
 model:
     name: 'DenoiserUnet'
     args:
-        dim: 64
+        dim: 48
         channels: 1
         dim_mults:
             - 1

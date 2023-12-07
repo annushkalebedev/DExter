@@ -1,4 +1,4 @@
-import os, sys
+import os, sys, random
 sys.path.insert(0, "../partitura")
 sys.path.insert(0, "../")
 import warnings
@@ -31,9 +31,8 @@ def main(cfg):
     torch.cuda.manual_seed(cfg.random_seed)
 
     cfg.data_root = to_absolute_path(cfg.data_root)
-    # load our data
-    paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
     if cfg.train_target == "transfer": # load only from paired set. 
+        paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
         train_set, valid_set = split_train_valid(paired, select_num=0, paired_input=True)
         assert(len(train_set) % 2 == 0)
         assert(len(valid_set) % 2 == 0)   
@@ -46,7 +45,9 @@ def main(cfg):
         train_set = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup_train.npy", allow_pickle=True)
         valid_set = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup_test.npy", allow_pickle=True)
 
-    train_set, valid_set = train_set[:500000], valid_set[:15000]
+    random.shuffle(train_set)
+    train_set, valid_set = train_set[:200000], valid_set[:5000]
+    # train_set, valid_set = train_set[:500000], valid_set[:15000]
 
     # Normalize data
     train_set, valid_set, means, stds = dataset_normalization(train_set, valid_set)
@@ -72,7 +73,8 @@ def main(cfg):
     if cfg.model.name == 'DenoiserUnet':
         name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
                 f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
-                f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" 
+                f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" \
+                f"dim={cfg.model.args.dim}" 
     else:
         name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
                 f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \

@@ -56,9 +56,9 @@ def split_train_valid(codec_data, select_num=58008, paired_input=False):
         - ASAP and VIENNA422 goes to testing set as they are better ground truths
         - split regarding to pieces.(same score path)
     """
-
-    codec_data_ = codec_data[list(map(lambda x: not (("ATEPP" in x['score_path']) and ("musicxml_cleaned.musicxml" in x['score_path'])), codec_data))]
-    train_idx = int(len(codec_data_) * 0.85) 
+    codec_data_ = codec_data
+    # codec_data_ = codec_data[list(map(lambda x: not (("ATEPP" in x['score_path']) and ("musicxml_cleaned.musicxml" in x['score_path'])), codec_data))]
+    train_idx = int(len(codec_data_) * 0.85 - 1) 
     assert (train_idx % 2 == 0)
     if not select_num:
         return codec_data_[:train_idx], codec_data_[train_idx:]
@@ -102,7 +102,7 @@ def split_train_valid(codec_data, select_num=58008, paired_input=False):
 
     np.save(f"{BASE_DIR}/codec_N=200_mixup_train.npy", train_set)
     np.save(f"{BASE_DIR}/codec_N=200_mixup_test.npy", valid_set)
-    hook()
+
     return train_set, valid_set
 
 def load_transfer_pair(K=50000, N=200):

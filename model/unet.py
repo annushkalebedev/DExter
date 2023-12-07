@@ -421,7 +421,7 @@ class DenoiserUnet(CodecDiffusion):
         
         # Initial layers for spectrograms
         self.condition_init_conv = nn.Conv2d(channels, init_dim, 7, padding=3)
-        self.condition_init_fc = nn.Linear(s_codec_rows, init_dim)
+        self.condition_init_fc = nn.Linear((s_codec_rows + c_codec_rows), init_dim)
         
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
@@ -500,13 +500,13 @@ class DenoiserUnet(CodecDiffusion):
     def forward(self, x_t, s_codec, c_codec, diffusion_step, sampling=False):
         """
         x_t : (B, 1, T, N)
-        s_codec : (B, 4, N)
-        c_codec : (B, 7, N)
+        s_codec : (B, N, 4)
+        c_codec : (B, N, 4)
         """
-
-        s_codec = rearrange(s_codec, "b w h -> b 1 w h")
-        s_codec = self.condition_init_conv(s_codec.float())  # (B, dim, N, 4)
-        s_codec = self.condition_init_fc(s_codec) # (B, dim, N, dim)
+        condition = torch.cat((s_codec, c_codec), dim=2)
+        condition = rearrange(condition, "b w h -> b 1 w h")
+        condition = self.condition_init_conv(condition.float())  # (B, dim, N, 4)
+        condition = self.condition_init_fc(condition) # (B, dim, N, dim)
         
         x_t = self.init_conv(x_t) # (B, dim, N, 5)
         x_t = self.init_fc(x_t) # (B, dim, N, dim)
@@ -516,34 +516,34 @@ class DenoiserUnet(CodecDiffusion):
         # downsample
         counter = 0
         for block1, block2, attn, downsample, condition_downsample in self.downs:
-            x_t, s_codec = block1(x_t, s_codec, t)
-            x_t, s_codec = block2(x_t, s_codec, t)
+            x_t, condition = block1(x_t, condition, t)
+            x_t, condition = block2(x_t, condition, t)
             x_t = attn(x_t)
-            h.append([x_t, s_codec])
+            h.append([x_t, condition])
             x_t = downsample(x_t)
-            s_codec = condition_downsample(s_codec)
+            condition = condition_downsample(condition)
             counter += 1 
 
         # bottleneck
-        x_t, s_codec = self.mid_block1(x_t, s_codec, t)
+        x_t, condition = self.mid_block1(x_t, condition, t)
         x_t = self.mid_attn(x_t)
-        x_t, s_codec = self.mid_block2(x_t, s_codec, t)
+        x_t, condition = self.mid_block2(x_t, condition, t)
         
 
         # upsample
         for block1, block2, attn, upsample, condition_upsample in self.ups:       
             x_t = torch.cat((x_t, *h.pop()), dim=1)
-            x_t, s_codec = block1(x_t, s_codec, t)
-            x_t, s_codec = block2(x_t, s_codec, t)
+            x_t, condition = block1(x_t, condition, t)
+            x_t, condition = block2(x_t, condition, t)
             x_t = attn(x_t)
             x_t = upsample(x_t)
-            s_codec = condition_upsample(s_codec)
+            condition = condition_upsample(condition)
             
-        x_t, s_codec = self.final_block(x_t, s_codec)
+        x_t, condition = self.final_block(x_t, condition)
         x_t = self.final_conv(x_t)
         x_t = self.final_fc(x_t)
 
-        return x_t, s_codec
+        return x_t, condition
     
 
 def cosine_beta_schedule(timesteps, s=0.008):

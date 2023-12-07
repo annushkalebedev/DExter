@@ -3,6 +3,7 @@ import torch
 sys.path.insert(0, "../partitura")
 sys.path.insert(0, "../")
 import partitura as pt
+import parangonar as pa
 import torch.nn.functional as F
 from scipy.interpolate import interp1d
 from scipy.stats import pearsonr, gaussian_kde, entropy
@@ -57,23 +58,40 @@ class Renderer():
             self.score = pt.score.unfold_part_maximal(pt.score.merge_parts(self.score.parts)) 
         
         if label_performance_path:
+            # labels are saved from training targets so they are already perfectly aligned.
             self.performed_part_label = pt.load_performance(label_performance_path).performedparts[0]
             self.gt_id = label_performance_path.split("/")[-1].split("_")[0]
 
         self.pnote_ids = [f"n{i}" for i in range(len(self.snote_ids))]
-        self.alignment = [{'label': "match", "score_id": sid, "performance_id": pid} for sid, pid in zip(self.snote_ids, self.pnote_ids)]
+        self.alignment = self.align_external_performances(self.score, self.performed_part)
+        self.alignment = [al for al in self.alignment if ('score_id' in al and  al['score_id'] in self.snote_ids)]
+        self.label_alignment = [{'label': "match", "score_id": sid, "performance_id": pid} for sid, pid in zip(self.snote_ids, self.pnote_ids)]
         self.pcodec_pred, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part, self.alignment)
-        self.pcodec_label, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part_label, self.alignment)
+        self.pcodec_label, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part_label, self.label_alignment)
         self.N = min(len(self.pcodec_pred), len(self.pcodec_label))
         self.pcodec_pred, self.pcodec_label = self.pcodec_pred[:self.N], self.pcodec_label[:self.N]
         self.compare_performance_curve()
-
         if save_seg:
             # in the case of scoreperformer renderer, need to hear the segment since the input is the entire piece.
             performed_part = pt.musicanalysis.decode_performance(self.score, self.pcodec_pred, snote_ids=self.snote_ids)     
             os.makedirs(self.save_root, exist_ok=True)                                                                                                                                                                                             
             pt.save_performance_midi(performed_part, f"{self.save_root}/{self.idx}_{self.piece_name}.mid")
 
+
+    def align_external_performances(self, score, performed_part):
+        """The external performances needs to be aligned"""
+
+        # compute note arrays from the loaded score and performance
+        sna = score.note_array()
+        pna = performed_part.note_array()
+
+        # match the notes in the note arrays --------------------- DualDTWNoteMatcher
+        sdm = pa.AutomaticNoteMatcher()
+        pred_alignment = sdm(sna, 
+                            pna,
+                            verbose_time=False)
+
+        return pred_alignment
 
     def render_sample(self, save_sourcelabel=False):
         """render the sample to midi file and save 

@@ -230,7 +230,7 @@ def process_dataset_codec(max_note_len, mix_up=False):
                 print(f"Data incomplete for {a_path}")
 
     if mix_up:
-        np.save(f"{BASE_DIR}/codec_N={max_note_len}_mixup_smoothed.npy", np.stack(data))
+        np.save(f"{BASE_DIR}/codec_N={max_note_len}_mixup.npy", np.stack(data))
     else:
         np.save(f"{BASE_DIR}/codec_N={max_note_len}.npy", np.stack(data))
 
@@ -264,7 +264,7 @@ def get_performance_codec(score_path, alignment_path, performance_path=None, sco
 
     # get the performance encodings
     parameters, snote_ids, pad_mask, m_score = pt.musicanalysis.encode_performance(score, performance, alignment, 
-                                                                          tempo_smooth='derivative'
+                                                                        #   tempo_smooth='derivative'
                                                                           )
 
     return parameters, score, snote_ids, m_score
@@ -435,6 +435,7 @@ if __name__ == '__main__':
 
     if args.compute_codec:
         process_dataset_codec(args.MAX_NOTE_LEN, mix_up=True)
+        hook()
     elif args.pairing:
         codec_data = np.load(f"{BASE_DIR}/codec_N={args.MAX_NOTE_LEN}_mixup_test.npy", allow_pickle=True) 
         transfer_pairs, unpaired = make_transfer_pair(codec_data, K=args.K, N=args.MAX_NOTE_LEN)

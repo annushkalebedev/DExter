@@ -290,12 +290,6 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         if self.training: # only use dropout during training
             s_codec = self.uncon_dropout(s_codec, self.hparams.cond_dropout) # making some score 0 to be unconditional
             c_codec = self.uncon_dropout(c_codec, self.hparams.cond_dropout) 
-                        
-        if sampling==True:
-            if self.hparams.condition == 'trainable_score':
-                s_codec = self.trainable_parameters
-            elif self.hparams.condition == 'fixed':
-                s_codec = torch.full_like(s_codec, -1)
 
         # Generate FiLM conditions (beta and gamma) by FiLM generator (Linear layer)
         c_codec_flat = torch.flatten(c_codec, start_dim = 1).float()

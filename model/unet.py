@@ -399,6 +399,7 @@ class DenoiserUnet(CodecDiffusion):
     def __init__(
         self,
         dim,
+        condition,
         p_codec_rows,
         s_codec_rows,
         c_codec_rows,
@@ -425,6 +426,19 @@ class DenoiserUnet(CodecDiffusion):
         
         dims = [init_dim, *map(lambda m: dim * m, dim_mults)]
         in_out = list(zip(dims[:-1], dims[1:]))
+
+        if condition == 'trainable_score':
+            trainable_parameters = torch.full((s_codec_rows + c_codec_rows, self.hparams.seg_len), -1).float() 
+            
+            trainable_parameters = nn.Parameter(trainable_parameters, requires_grad=True)
+            self.register_parameter("trainable_parameters", trainable_parameters)
+            self.uncon_dropout = self.trainable_dropout        
+            
+        elif condition == 'fixed':
+            self.uncon_dropout = self.fixed_dropout
+        else:
+            raise ValueError("unrecognized condition '{condition}'")
+
 
         if use_convnext:
             block_klass = partial(CodecConvNextBlock, mult=convnext_mult)
@@ -503,6 +517,11 @@ class DenoiserUnet(CodecDiffusion):
         s_codec : (B, N, 4)
         c_codec : (B, N, 4)
         """
+
+        if self.training: # only use dropout during training
+            s_codec = self.uncon_dropout(s_codec, self.hparams.cond_dropout) # making some score 0 to be unconditional
+            c_codec = self.uncon_dropout(c_codec, self.hparams.cond_dropout) 
+
         condition = torch.cat((s_codec, c_codec), dim=2)
         condition = rearrange(condition, "b w h -> b 1 w h")
         condition = self.condition_init_conv(condition.float())  # (B, dim, N, 4)
@@ -544,7 +563,12 @@ class DenoiserUnet(CodecDiffusion):
         x_t = self.final_fc(x_t)
 
         return x_t, condition
-    
+
+    def fixed_dropout(self, x, p, masked_value=-1):
+        mask = torch.distributions.Bernoulli(probs=(p)).sample((x.shape[0],)).long()
+        mask_idx = mask.nonzero()
+        x[mask_idx] = masked_value
+        return x
 
 def cosine_beta_schedule(timesteps, s=0.008):
     """

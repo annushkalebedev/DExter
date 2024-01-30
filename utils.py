@@ -99,7 +99,6 @@ def split_train_valid(codec_data, select_num=58008, paired_input=False):
     valid_set = selected_cd
 
     valid_set = np.array(valid_set)[list(map(lambda x: "mu" not in x['piece_name'], valid_set))]     
-
     np.save(f"{BASE_DIR}/codec_N=200_mixup_train.npy", train_set)
     np.save(f"{BASE_DIR}/codec_N=200_mixup_test.npy", valid_set)
 
@@ -118,7 +117,7 @@ def load_transfer_pair(K=50000, N=200):
 
 def group_same_seg(valid_set):
     """Group all valid_set by segment, return a dictionary"""
-    valid_df = pd.DataFrame(valid_set)
+    valid_df = pd.DataFrame(list(valid_set))
     # Group by 'grouptype' and collect indices
     grouped_indices = valid_df.groupby("snote_id_path").apply(lambda group: list(group.index))
     indices_dict = grouped_indices.to_dict()
@@ -126,6 +125,7 @@ def group_same_seg(valid_set):
     indices_dict = {k.split("/")[-1][:-4]: v for k, v in indices_dict.items()}
 
     # {"ASAP_Bach_Fugue_bwv_854_seg2": [23, 766], ...}
+    avg_repetition = sum([len(v) for k, v in indices_dict.items()]) / len(indices_dict) # 5.39
     return indices_dict
 
 

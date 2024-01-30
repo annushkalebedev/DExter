@@ -45,7 +45,9 @@ class Renderer():
         self.success = True
         self.gt_id = 0
 
-    def load_external_performances(self, performance_path, score_path, snote_ids, label_performance_path=None, piece_name=None, save_seg=False, merge_tracks=False):
+    def load_external_performances(self, performance_path, score_path, snote_ids, 
+                                   label_performance_path=None, piece_name=None, save_seg=False, 
+                                   merge_tracks=False, external_align=False):
         """load the performance that's already generated (for evaluating other models)"""
 
         self.performed_part = pt.load_performance(performance_path, merge_tracks=merge_tracks).performedparts[0]
@@ -63,9 +65,11 @@ class Renderer():
             self.gt_id = label_performance_path.split("/")[-1].split("_")[0]
 
         self.pnote_ids = [f"n{i}" for i in range(len(self.snote_ids))]
-        self.alignment = self.align_external_performances(self.score, self.performed_part)
-        self.alignment = [al for al in self.alignment if ('score_id' in al and  al['score_id'] in self.snote_ids)]
+        self.alignment = [{'label': "match", "score_id": sid, "performance_id": pid} for sid, pid in zip(self.snote_ids, self.pnote_ids)]
         self.label_alignment = [{'label': "match", "score_id": sid, "performance_id": pid} for sid, pid in zip(self.snote_ids, self.pnote_ids)]
+        if external_align:
+            self.alignment = self.align_external_performances(self.score, self.performed_part)
+            self.alignment = [al for al in self.alignment if ('score_id' in al and  al['score_id'] in self.snote_ids)]
         self.pcodec_pred, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part, self.alignment)
         self.pcodec_label, _, _, _ = pt.musicanalysis.encode_performance(self.score, self.performed_part_label, self.label_alignment)
         self.N = min(len(self.pcodec_pred), len(self.pcodec_label))
@@ -230,6 +234,10 @@ class Renderer():
         performance_array = np.array(parameters, 
                             dtype=[("beat_period", "f4"), ("velocity", "f4"), ("timing", "f4"), ("articulation_log", "f4"), ("pedal", "f4")])
 
+        performance_array['timing'] = 0
+
+        # performance_array['beat_period'] = np.convolve(performance_array['beat_period'], np.ones(10)/10, mode='same')
+
         return performance_array
 
 
@@ -255,11 +263,11 @@ class Renderer():
         if save_source:
             self.feats_source, res = pt.musicanalysis.compute_performance_features(self.score, self.performed_part_source, alignment, feature_functions='all')
             pd.DataFrame(self.feats_source).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_source.csv", index=False)
-            self.tv_label_feats.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_label_tv_feats.csv", index=False)
+            self.tv_source_feats.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_label_tv_feats.csv", index=False)
 
         if save_label:
             pd.DataFrame(self.feats_label).to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_feats_label.csv", index=False)
-            self.tv_source_feats.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_source_tv_feats.csv", index=False)
+            self.tv_label_feats.to_csv(f"{self.save_root}/{self.idx}_{self.piece_name}_source_tv_feats.csv", index=False)
 
 
 

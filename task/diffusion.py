@@ -281,8 +281,8 @@ class CodecDiffusion(pl.LightningModule):
 
     def predict(self, batch, batch_idx, save_animation=False, evaluate=False):
 
-        batch_source = batch
-        batch_label = dict([(k, tensor_pair_swap(v)) for k, v in batch.items()])
+        batch_label = batch
+        batch_source = dict([(k, tensor_pair_swap(v)) for k, v in batch.items()])
 
         # rescale
         batch_source['p_codec'] = p_codec_scale(batch_source['p_codec'], self.hparams.dataset_means, self.hparams.dataset_stds)
@@ -349,6 +349,7 @@ class CodecDiffusion(pl.LightningModule):
 
         sampled_loss = self.p_losses(batch_label_codec, torch.tensor(pcodec_pred), loss_type='l2')
 
+        hook()
         return sampled_loss, tc_fig, tempo_vel_loss, tempo_vel_cor
         
         
@@ -588,7 +589,7 @@ class CodecDiffusion(pl.LightningModule):
         
         # Use our model (noise predictor) to predict the mean 
         epsilon_c, cond = self(x, s_codec, c_codec, t_tensor)
-        epsilon_0, _ = self(x, torch.zeros_like(s_codec), c_codec, t_tensor)
+        epsilon_0, _ = self(x, torch.zeros_like(s_codec), torch.zeros_like(c_codec), t_tensor)
         epsilon = self.hparams.sampling.w * epsilon_c + (1 - self.hparams.sampling.w) * epsilon_0
         
         # Equation 11 in the paper
@@ -732,11 +733,10 @@ class CodecDiffusion(pl.LightningModule):
             if renderer.success:
                 renderer.plot_curves(ax)
                 if evaluate:
-                    renderer.save_performance_features(save_source=False, save_label=False)
+                    renderer.save_performance_features(save_source=False, save_label=True)
                     renderer.save_pf_distribution()
                 
         plt.savefig(f"{save_root}/tempo_curves.png") 
-
         return fig, tempo_vel_loss / B, tempo_vel_cor / B
 
 
@@ -765,13 +765,6 @@ class CodecDiffusion(pl.LightningModule):
                                     sqrt_alphas_cumprod=self.sqrt_alphas_cumprod,
                                     sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod,
                                     noise=noise)
-                if c_config != "":
-                    c, control = c_config.split("/")
-                    c_idx = self.c_type.index(c)
-                    if control == "more":
-                        c_codec[c_idx] *= 2
-                    if control == "less":
-                        c_codec[c_idx] *= 0.5 # normal is just itself
             else:
                 start_noise = None
 
@@ -779,6 +772,13 @@ class CodecDiffusion(pl.LightningModule):
             start_noise = batch_source_codec
             c_codec = batch_label['c_codec'] - batch_source['c_codec']
 
+        if c_config != "":
+            c, control = c_config.split("/")
+            c_idx = self.c_type.index(c)
+            if control == "more":
+                c_codec[c_idx] *= 2
+            if control == "less":
+                c_codec[c_idx] *= 0.5 # normal is just itself
         return start_noise, sample_steps, c_codec
 
     def set_eval_c_config(self):

@@ -2,6 +2,7 @@ model:
     name: 'DenoiserUnet'
     args:
         dim: 48
+        condition: 'fixed' # either trainable_score or fixed
         channels: 1
         dim_mults:
             - 1
@@ -11,3 +12,4 @@ model:
         s_codec_rows: 4
         c_codec_rows: 7
         seg_len: ${seg_len}
+        cond_dropout: 0.1

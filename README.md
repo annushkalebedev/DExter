@@ -3,19 +3,20 @@
 Code repository for DExter: a Diffusion-based Expressive performance generat(o)r, where we show samples of conditional and unconditioned rendering with perceptual-inspired features, as well as controlled ablation studies. The name also echos “dexterity”, one of the crucial qualities of human masters’ hands that enables the most fine-grained control over individual notes, which our models strive to achieve as well. 
 
 
-- __Demo__ : https://river-blackberry-7de.notion.site/DExter-Learning-and-Controlling-Performance-Expression-through-Diffusion-models-5ee49ab5db68402b883f2f288022661a?pvs=4 
+- __Demo__ : http://bit.ly/4a1xs1x 
 <!-- - __Wandb__: https://wandb.ai/huanz/DiffPerformer -->
 
 # Table of Content
 - [DExter: Learning and Controlling Performance Expression with Diffusion Models](#dexter-learning-and-controlling-performance-expression-with-diffusion-models)
 - [Table of Content](#table-of-content)
 - [Installation](#installation)
-- [Dataset and Data processing](#dataset-and-data-processing)
+- [Inference](#inference)
+- [Training](#training)
+  - [Dataset and Data processing](#dataset-and-data-processing)
   - [Precomputing codec](#precomputing-codec)
   - [Transfer pairing](#transfer-pairing)
-- [Training](#training)
   - [Supervised training with conditioning](#supervised-training-with-conditioning)
-- [Testing \& inference](#testing--inference)
+- [Testing](#testing)
 - [Evaluation](#evaluation)
 
 
@@ -29,7 +30,13 @@ pip install -r requirements.txt
 ```
 Partitura versioning: This project use a slightly modified version of performance codec, and please install [my fork of partitura](https://github.com/anusfoil/partitura/tree/diffperformer_codec) where this branch is dedicated to this project. 
 
-# Dataset and Data processing
+# Inference
+
+
+
+# Training
+
+## Dataset and Data processing
 
 Three score-performance aligned datasets are used in this project:
 * ATEPP: https://github.com/BetsyTang/ATEPP 
@@ -70,9 +77,6 @@ python prepare_data.py --pairing  --K=2374872
 
 
 
-
-# Training
-
 ## Supervised training with conditioning
 
 ```
@@ -86,11 +90,9 @@ python train.py gpus=[0] task.timestep=1000 --train_target='gen_noise'
 
 The checkpoints will be output to `artifacts/checkpoint/`
 
-To check the progress, please go to the wandb page. 
 
 
-# Testing & inference
-The training script above already includes the inference testing. (testing is run every 50 epochs of training.)
+# Testing 
 
 First, open `config/train.yaml`, and then specify the weight to use in `pretrained_path`, for example `pretrained_path='artifacts/checkpoint/len300-beta0.02-steps1500-x_0-L15-C512-cfdg_ddpm_x0-w=0-p=0.1-k=3-dia=2-4/1244e-diffusion_loss0.03.ckpt'`. Or you can specify in the command line.
 
@@ -119,7 +121,7 @@ For the full list of
 python train.py gpus=[0] --renderer='gen_noise'
 ```
 
-- `renderer` sets which GPU to use. `gpus=[k]` means `device='cuda:k'`, `gpus=2` means [DistributedDataParallel](https://pytorch.org/docs/stable/generated/torch.nn.parallel.DistributedDataParallel.html) (DDP) is used with two GPUs.
+- `renderer` 
 - For a full list of parameters please refer to `evaluate.yaml`.
 
 

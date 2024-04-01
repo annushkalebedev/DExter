@@ -282,7 +282,7 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         c_codec : (B, 7, N)
         """
         
-        x_t = x_t.squeeze(1).transpose(1, 2) # (B, 4, LEN)
+        x_t = x_t.squeeze(1).transpose(1, 2) # (B, 5, LEN)
 
         s_codec = s_codec.transpose(1, 2).float()
         s_codec = self.condition_normalize(s_codec)

@@ -435,15 +435,11 @@ if __name__ == '__main__':
 
     if args.compute_codec:
         process_dataset_codec(args.MAX_NOTE_LEN, mix_up=True)
-        hook()
     elif args.pairing:
         codec_data = np.load(f"{BASE_DIR}/codec_N={args.MAX_NOTE_LEN}_mixup_test.npy", allow_pickle=True) 
         transfer_pairs, unpaired = make_transfer_pair(codec_data, K=args.K, N=args.MAX_NOTE_LEN)
-        hook()
     # codec_data_analysis()
-
-    hook()
-
+    
     plot_codec_list(codec_data[:1])
 
     # for data in codec_data:

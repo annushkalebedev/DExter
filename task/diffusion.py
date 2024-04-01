@@ -352,7 +352,19 @@ class CodecDiffusion(pl.LightningModule):
         hook()
         return sampled_loss, tc_fig, tempo_vel_loss, tempo_vel_cor
         
-        
+
+    def inference_one(self, batch):
+
+        sample_steps = self.hparams.timesteps - 1 
+
+        pred_list = self.p_sample(batch, sample_steps=sample_steps)  
+        pcodec_pred, _ = pred_list[-1]  # Extract the final prediction
+
+        pcodec_pred_processed = p_codec_scale(pcodec_pred, self.hparams.dataset_means, self.hparams.dataset_stds)
+
+        return pcodec_pred_processed
+
+
     def step(self, batch, batch_idx):
         p_codec, s_codec, c_codec = batch['p_codec'], batch['s_codec'], batch['c_codec']
         batch_size = p_codec.shape[0]
@@ -437,7 +449,7 @@ class CodecDiffusion(pl.LightningModule):
         if type(start_noise) != type(None):
             noise = start_noise
         else:
-            noise = torch.randn_like(p_codec)
+            noise = torch.randn_like(p_codec.float()).to(self.device)
 
         noise_list = []
         noise_list.append((noise, self.hparams.timesteps))

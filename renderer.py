@@ -131,6 +131,21 @@ class Renderer():
         return tempo_vel_loss, tempo_vel_cor
 
 
+    def render_inference_sample(self, score):
+        """render the sample to midi file and save 
+        """
+
+        self.pcodec_pred = self.parameters_to_performance_array(self.sampled_pcodec)
+
+
+        self.performed_part = pt.musicanalysis.decode_performance(score, self.pcodec_pred)
+
+        pt.save_performance_midi(self.performed_part, f"{self.save_root}/{self.piece_name}.mid")
+
+        return 
+
+
+
     def load_and_decode(self):
         """load the meta information (scores, snote_ids and piece name) then decode the p_codecs into performed parts  
         load into module:

@@ -47,17 +47,18 @@ def main(cfg):
 
     s_codec_tensor = torch.stack(s_codec_tensor)
 
-    # Normalize data
-    # train_set, valid_set, means, stds = dataset_normalization(train_set, valid_set)
-    # cfg.task.dataset_means = means
-    # cfg.task.dataset_stds = stds
 
-    if cfg.renderer == "diff":
-        model = getattr(Model, cfg.model.model.name).load_from_checkpoint(
-                                            checkpoint_path=cfg.pretrained_path,\
-                                            **cfg.model.model.args, 
-                                            **cfg.task)
-    
+    # hard-code the training data normalization values since we are not loading data here
+    cfg.task.dataset_means = [0.6753414273262024, 0.4713279902935028, -0.006409936584532261, 0.612022340297699, 0.25294196605682373]
+    cfg.task.dataset_stds = [1.9482849836349487, 0.15265130996704102, 0.5619590878486633, 1.2521803379058838, 0.15565505623817444]
+
+
+    # model = getattr(Model, cfg.model.model.name).load_from_checkpoint(
+    #                                     checkpoint_path=cfg.pretrained_path,\
+    #                                     **cfg.model.model.args, 
+    #                                     **cfg.task)
+    model = getattr(Model, cfg.model.model.name)(**cfg.model.model.args, **cfg.task)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     with torch.no_grad():
@@ -79,7 +80,7 @@ def main(cfg):
     save_root = 'inference_out'
     renderer = Renderer(save_root, batch['p_codec'], piece_name='test')
 
-    tvl, tvc = renderer.render_inference_sample(score)
+    renderer.render_inference_sample(score)
     hook()
 
 

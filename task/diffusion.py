@@ -367,6 +367,10 @@ class CodecDiffusion(pl.LightningModule):
 
     def step(self, batch, batch_idx):
         p_codec, s_codec, c_codec = batch['p_codec'], batch['s_codec'], batch['c_codec']
+
+        if self.hparams.drop_c_con:
+            c_codec = torch.zeros_like(c_codec)
+
         batch_size = p_codec.shape[0]
         device = p_codec.device
 

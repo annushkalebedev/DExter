@@ -11,6 +11,7 @@ seg_len: 200
 pin_memory: True
 random_seed: 13
 condition_eval: False
+drop_c_con: False
 
 train_target: 'gen_noise' # 'gen_noise' or 'transfer' 
 

@@ -139,7 +139,7 @@ class Renderer():
 
 
         self.performed_part = pt.musicanalysis.decode_performance(score, self.pcodec_pred)
-
+        hook()
         pt.save_performance_midi(self.performed_part, f"{self.save_root}/{self.piece_name}.mid")
 
         return 
@@ -249,7 +249,7 @@ class Renderer():
         performance_array = np.array(parameters, 
                             dtype=[("beat_period", "f4"), ("velocity", "f4"), ("timing", "f4"), ("articulation_log", "f4"), ("pedal", "f4")])
 
-        performance_array['timing'] = 0
+        # performance_array['timing'] = 0
 
         # performance_array['beat_period'] = np.convolve(performance_array['beat_period'], np.ones(10)/10, mode='same')
 

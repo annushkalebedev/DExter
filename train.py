@@ -32,6 +32,7 @@ def main(cfg):
 
     cfg.data_root = to_absolute_path(cfg.data_root)
     if cfg.train_target == "transfer": # load only from paired set. 
+        # TODO: modify after the new hdf5 loading
         paired, _ = load_transfer_pair(K=2000000, N=cfg.seg_len) 
         train_set, valid_set = split_train_valid(paired, select_num=0, paired_input=True)
         assert(len(train_set) % 2 == 0)
@@ -45,8 +46,13 @@ def main(cfg):
         train_set = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup_train.npy", allow_pickle=True)
         valid_set = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup_test.npy", allow_pickle=True)
 
+        hdf5_path = f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup.hdf5"
+        train_set = load_data_from_hdf5(hdf5_path, split="train")
+        valid_set = load_data_from_hdf5(hdf5_path, split="test")
+        # hook()
+
     random.shuffle(train_set)
-    train_set, valid_set = train_set[:200000], valid_set[:5000]
+    # train_set, valid_set = train_set[:200000], valid_set[:5000]
     # train_set, valid_set = train_set[:500000], valid_set[:15000]
 
     # Normalize data

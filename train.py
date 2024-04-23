@@ -43,13 +43,8 @@ def main(cfg):
         # data = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup.npy", allow_pickle=True)
         # train_set, valid_set = split_train_valid(data, paired_input=False)
 
-        train_set = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup_train.npy", allow_pickle=True)
-        valid_set = np.load(f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup_test.npy", allow_pickle=True)
-
         hdf5_path = f"{BASE_DIR}/codec_N={cfg.seg_len}_mixup.hdf5"
-        train_set = load_data_from_hdf5(hdf5_path, split="train")
-        valid_set = load_data_from_hdf5(hdf5_path, split="test")
-        # hook()
+        train_set, valid_set = load_data_from_hdf5(hdf5_path)
 
     random.shuffle(train_set)
     # train_set, valid_set = train_set[:200000], valid_set[:5000]
@@ -68,26 +63,26 @@ def main(cfg):
 
     # Model
     if cfg.load_trained:
-        model = getattr(Model, cfg.model.name).load_from_checkpoint(
+        model = getattr(Model, cfg.model.model.name).load_from_checkpoint(
                                             checkpoint_path=cfg.pretrained_path,\
-                                            **cfg.model.args, 
+                                            **cfg.model.model.args, 
                                             **cfg.task)
     else:
-        model = getattr(Model, cfg.model.name)(**cfg.model.args, **cfg.task)
+        model = getattr(Model, cfg.model.model.name)(**cfg.model.model.args, **cfg.task)
             
     lw = "".join(str(x) for x in cfg.task.loss_weight)
-    if cfg.model.name == 'DenoiserUnet':
+    if cfg.model.model.name == 'DenoiserUnet':
         name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
                 f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
                 f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" \
-                f"dim={cfg.model.args.dim}" 
+                f"dim={cfg.model.model.args.dim}" 
     else:
         name = f"target{cfg.train_target}-lw{lw}-len{cfg.seg_len}-beta{round(cfg.task.beta_end, 2)}-steps{cfg.task.timesteps}-{cfg.task.training.mode}-" + \
                 f"Transfer{cfg.task.transfer}-ssfrac{cfg.task.sample_steps_frac}-" + \
-                f"L{cfg.model.args.residual_layers}-C{cfg.model.args.residual_channels}-" + \
+                f"L{cfg.model.model.args.residual_layers}-C{cfg.model.model.args.residual_channels}-" + \
                 f"{cfg.task.sampling.type}-w={cfg.task.sampling.w}-" + \
-                f"p={cfg.model.args.cond_dropout}-k={cfg.model.args.kernel_size}-" + \
-                f"dia={cfg.model.args.dilation_base}-{cfg.model.args.dilation_bound}"
+                f"p={cfg.model.model.args.cond_dropout}-k={cfg.model.model.args.kernel_size}-" + \
+                f"dia={cfg.model.model.args.dilation_base}-{cfg.model.model.args.dilation_bound}"
 
     if cfg.test_only:
         name = "TEST-" + name

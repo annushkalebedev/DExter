@@ -118,9 +118,9 @@ def process_dataset_codec(max_note_len, mix_up=False):
                 p_codec, c_codec, snote_ids, score = get_codecs(s_path, a_path, c_path, 
                                                                 performance_path=p_path, score=(score if reuse_score else None))
                 
-                if p_codec is None or c_codec is None:
-                    continue
                 if 60 / p_codec[:, 0].mean() > 200: # Tempo filter check.
+                    grp = hdf5_file.create_group(f"{dataset}_{j}")
+                    grp.create_dataset('error', data='error')
                     continue
 
                 if not reuse_score:
@@ -142,6 +142,8 @@ def process_dataset_codec(max_note_len, mix_up=False):
 
                 if not ((len(p_codec) == len(s_codec)) and (len(p_codec) == len(snote_ids))):
                     print(f"{a_path} has length issue: p: {len(p_codec)}; s: {len(s_codec)}") 
+                    grp = hdf5_file.create_group(f"{dataset}_{j}")
+                    grp.create_dataset('error', data='error')
                     continue
 
                 for i, (p_codec, c_codec) in enumerate(zip(([p_codec] + mixuped_p_codec), ([c_codec] + mixuped_c_codec))): # segmentation
@@ -190,175 +192,51 @@ def process_dataset_codec(max_note_len, mix_up=False):
     print("Processing and data saving complete.")
 
 
-# def process_dataset_codec(max_note_len, mix_up=False):
-#     """process the performance features for the given dataset. Save the 
-#     computed features in the form of numpy arrays in the same directory as 
-#     performance data.
-#     """
-
-#     with open('skip_data.txt', 'r') as file:
-#         skip_paths = file.read().splitlines()
-#     skip_paths = [sp.strip() for sp in skip_paths]
-
-#     prev_s_path, data = None, []
-#     os.makedirs(f"{BASE_DIR}/snote_ids/N={max_note_len}", exist_ok=True)
-#     for dataset in [
-#                     'ATEPP',
-#                     'ASAP', 
-#                     'VIENNA422',
-#                     ]:
-
-#         if dataset == "VIENNA422":
-#             alignment_paths = glob.glob(os.path.join(VIENNA_MATCH_DIR, "*[!e].match"))
-#             alignment_paths = sorted(alignment_paths)
-#             score_paths = [(VIENNA_MUSICXML_DIR + pp.split("/")[-1][:-10] + ".musicxml") for pp in alignment_paths]
-#             performance_paths = [None] * len(alignment_paths) # don't use the given performance, use the aligned.
-#             cep_feat_paths = [("../Datasets/vienna4x22/cep_features/" + pp.split("/")[-1][:-6] + ".csv") for pp in alignment_paths]
-#         if dataset == "ASAP":
-#             performance_paths = glob.glob(os.path.join(ASAP_DIR, "**/*[!e].mid"), recursive=True)
-#             alignment_paths = [(pp[:-4] + "_note_alignments/note_alignment.tsv") for pp in performance_paths]
-#             score_paths = [os.path.join("/".join(pp.split("/")[:-1]), "xml_score.musicxml") for pp in performance_paths]
-#             cep_feat_paths = [pp[:-4] + "_cep_features.csv" for pp in performance_paths]
-#         if dataset == "ATEPP":
-#             alignment_paths = glob.glob(os.path.join(ATEPP_DIR, "**/[!z]*n.csv"), recursive=True)
-#             alignment_paths = sorted(alignment_paths)
-#             performance_paths = [(aa[:-10] + ".mid") for aa in alignment_paths]
-#             score_paths = [glob.glob(os.path.join("/".join(pp.split("/")[:-1]), "*.*l"))[0] for idx, pp in enumerate(performance_paths)]
-#             cep_feat_paths = ["/".join(aa.split("/")[:-1]) + "_cep_features.csv" for aa in alignment_paths]
-#             atepp_overlap_dirs = get_atepp_overlap()
-#             atepp_overlap_dirs = [f"{ATEPP_DIR}/{ao_dir}" for ao_dir in atepp_overlap_dirs]
-
-#         # storing codecs for existing score
-#         same_score_p_codec, mixuped_p_codec = [], []
-#         same_score_c_codec, mixuped_c_codec = [], []
-#         for s_path, p_path, a_path, c_path in tqdm(zip(score_paths, performance_paths, alignment_paths, cep_feat_paths)):
-        
-#             # Check if any of the provided paths should be skipped (file can't load)
-#             if (s_path in skip_paths) or (a_path in skip_paths) or (p_path in skip_paths):
-#                 continue
-
-#             if (os.path.exists(s_path) and os.path.exists(a_path)):
-
-#                 if dataset == 'ATEPP': # ATEPP: skip the bad ones
-#                     alignment = pt.io.importparangonada.load_parangonada_alignment(a_path)
-#                     match_aligns = [a for a in alignment if a['label'] == 'match']
-#                     insertion_aligns = [a for a in alignment if a['label'] == 'insertion']
-#                     deletion_aligns = [a for a in alignment if a['label'] == 'deletion']
-#                     if (len(match_aligns) / (len(insertion_aligns) + len(deletion_aligns) + len(match_aligns))) < 0.5:
-#                         continue
-#                 # path to save the reproducing artifacts
-#                 if dataset == "VIENNA422":
-#                     piece_name = s_path.split("/")[-1].split(".")[0]
-#                 if dataset == "ASAP":
-#                     piece_name = "_".join(s_path.split("alignment/")[-1].split("/")[:-1])
-#                 if dataset == 'ATEPP':
-#                     piece_name = p_path.split("/")[-1][:-4] 
-#                     perf_name = p_path.split("/")[-1][:-4] 
-#                 save_snote_id_path = f"{BASE_DIR}/snote_ids/N={max_note_len}/{dataset}_{piece_name}"
 
 
-#                 # depending on whether we are still processing the same composition, do mixup
-#                 reuse_score = (prev_s_path == s_path)
-
-#                 p_codec, c_codec, snote_ids, score = get_codecs(s_path, a_path, c_path, 
-#                                                                 performance_path=p_path, score=(score if reuse_score else None))
-#                 if p_codec is None or c_codec is None:
-#                     continue
-
-#                 # Tempo filter check.
-#                 if 60 / p_codec[:, 0].mean() > 200:
-#                     continue
-
-#                 if not reuse_score:
-#                     same_score_p_codec, mixuped_p_codec = [], []
-#                     same_score_c_codec, mixuped_c_codec = [], []
-#                 else:
-#                     if mix_up and ((dataset == "VIENNA422") or (dataset == 'ATEPP' and "/".join(s_path.split("/")[:-1]) in atepp_overlap_dirs)):
-#                         mixuped_p_codec = [np.mean(np.array([p_codec, ss_p_codec]), axis=0) for ss_p_codec in same_score_p_codec]
-#                         same_score_p_codec.append(p_codec)
-#                         mixuped_c_codec = [np.mean(np.array([c_codec, ss_c_codec]), axis=0) for ss_c_codec in same_score_c_codec]
-#                         same_score_c_codec.append(c_codec)
-
-#                 sna = score.note_array()
-#                 sna = sna[np.in1d(sna['id'], snote_ids)]
-#                 s_codec = rfn.structured_to_unstructured(
-#                     sna[['onset_div', 'duration_div', 'pitch', 'voice']])
-
-#                 if not ((len(p_codec) == len(s_codec)) and (len(p_codec) == len(snote_ids))):
-#                     print(f"{a_path} has length issue: p: {len(p_codec)}; s: {len(s_codec)}") 
-#                     continue
-
-#                 for i, (p_codec, c_codec) in enumerate(zip(([p_codec] + mixuped_p_codec), ([c_codec] + mixuped_c_codec))): # segmentation
-#                     if i == 1:
-#                         piece_name = piece_name + "_mixup"  # mixuped codec name
-
-#                     for idx in range(0, len(p_codec), max_note_len): # split the piece 
-#                         seg_p_codec = p_codec[idx : idx + max_note_len]
-#                         seg_s_codec = s_codec[idx : idx + max_note_len]
-#                         seg_c_codec = c_codec[idx : idx + max_note_len]
-#                         seg_snote_ids = snote_ids[idx : idx + max_note_len]
-
-#                         if len(seg_p_codec) < max_note_len:
-#                             seg_p_codec = np.pad(seg_p_codec, ((0, max_note_len - len(seg_p_codec)), (0, 0)), mode='constant', constant_values=0)
-#                             seg_s_codec = np.pad(seg_s_codec, ((0, max_note_len - len(seg_s_codec)), (0, 0)), mode='constant', constant_values=0)
-#                             seg_c_codec = np.pad(seg_c_codec, ((0, max_note_len - len(seg_c_codec)), (0, 0)), mode='constant', constant_values=0)
-
-#                         if len(seg_snote_ids) == 0:
-#                             hook()
-
-#                         seg_id_path = f"{save_snote_id_path}_seg{int(idx/max_note_len)}.npy"
-#                         # save snote_id
-#                         np.save(seg_id_path, seg_snote_ids) 
-
-#                         data.append({
-#                                     "p_codec": seg_p_codec, 
-#                                     "s_codec": seg_s_codec,
-#                                     "c_codec": seg_c_codec,
-#                                     "snote_id_path": seg_id_path,
-#                                     "score_path": s_path,
-#                                     "piece_name": piece_name  # piece name for shortcut and identifying the generated sample. unique for performance not composition
-#                                     })
-
-#                 prev_s_path = s_path
-#             else:
-#                 print(f"Data incomplete for {a_path}")
-
-#     if mix_up:
-#         np.save(f"{BASE_DIR}/codec_N={max_note_len}_full_mixup.npy", np.stack(data))
-#     else:
-#         np.save(f"{BASE_DIR}/codec_N={max_note_len}.npy", np.stack(data))
-
-#     return 
-
-
-
-def load_data_from_hdf5(hdf5_path, split='train'):
-    data = []
+def load_data_from_hdf5(hdf5_path):
+    train_data, test_data = [], []
+    print('Loading data from HDF5 file...')
 
     # Open the HDF5 file for reading
     with h5py.File(hdf5_path, 'r') as hdf5_file:
         # Iterate over groups in HDF5 file
-        for group_name in hdf5_file:
-            print(group_name)
+        for group_name in tqdm(hdf5_file):
             group = hdf5_file[group_name]
             
-            # Load the data for this piece into a dictionary
-            piece_data = {
-                'p_codec': np.array(group['p_codec']),
-                's_codec': np.array(group['s_codec']),
-                'c_codec': np.array(group['c_codec']),
-                'snote_id_path': np.array(group['snote_id_path']),
-                'score_path': np.array(group['score_path']),
-                'piece_name': np.array(group['piece_name']),
-                'split': np.array(group['split'])
-            }
+            # Skip groups with 'error'
+            if 'error' in group:
+                continue
             
-            if (piece_data['split'] == str.encode(split)).all(): # a recording should all belong to one split
-                data.append(piece_data)
-    
-    hook()
-    return data
+            # Pre-load datasets into memory once
+            p_codec = np.array(group['p_codec'])
+            s_codec = np.array(group['s_codec'])
+            # c_codec = np.ones(group['c_codec'].shape)
+            c_codec = np.array(group['c_codec'])
+            snote_id_path = np.array(group['snote_id_path'])
+            score_path = np.array(group['score_path'])
+            piece_name = np.array(group['piece_name'])
+            split = np.array(group['split'])
 
+            # Collect all the pieces' data in a list
+            piece_data = [{
+                'p_codec': p_codec[i],
+                's_codec': s_codec[i],
+                'c_codec': c_codec[i],
+                'snote_id_path': snote_id_path[i],
+                'score_path': score_path[i],
+                'piece_name': piece_name[i].decode(),
+                'split': split[i].decode()
+            } for i in range(len(p_codec))]
+                        
+            # Check split and extend data
+            if (piece_data[0]['split'] == 'train'):   
+                train_data.extend(piece_data)
+            else:
+                test_data.extend([pd for pd in piece_data if "mixup" not in pd['piece_name']])
+                
+
+    return train_data, test_data
 
 def get_codecs(score_path, alignment_path, c_path, performance_path=None, score=None):
     """compute the performance feature given score, alignment and performance path.

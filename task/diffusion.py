@@ -349,7 +349,6 @@ class CodecDiffusion(pl.LightningModule):
 
         sampled_loss = self.p_losses(batch_label_codec, torch.tensor(pcodec_pred), loss_type='l2')
 
-        hook()
         return sampled_loss, tc_fig, tempo_vel_loss, tempo_vel_cor
         
 
@@ -376,7 +375,7 @@ class CodecDiffusion(pl.LightningModule):
 
         p_codec = p_codec.unsqueeze(1)  # (B, 1, T, F)
 
-        t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long() # more diverse sampling
+        t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long().cpu() # more diverse sampling
         
         noise = torch.randn_like(p_codec) 
         if self.hparams.training.target == "transfer": # invert each pair 

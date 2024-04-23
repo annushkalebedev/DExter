@@ -261,14 +261,14 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         
         # Original dilation was 2**(i % dilation_cycle_length)           
         self.residual_layers = nn.ModuleList([
-            ResidualBlockwithFilm(residual_channels, dilation_base**(i % dilation_bound), kernel_size, 
+            ResidualBlock(residual_channels, dilation_base**(i % dilation_bound), kernel_size, 
                                   uncond=unconditional, condition_rows=s_codec_rows)
             for i in range(residual_layers)
         ])
 
         #FiLM condition parameter (beta and gamma) generator for score information (MIDI frame roll)
         #The socre length is fixed for 20 sec and 32 resolution/second for the MIDI frame roll. 
-        self.film_layer = nn.Linear(in_features= 200*c_codec_rows, out_features= 2*residual_layers, bias= True)
+        # self.film_layer = nn.Linear(in_features= 200*c_codec_rows, out_features= 2*residual_layers, bias= True)
 
         self.skip_projection = Conv1d(residual_channels, residual_channels, 1)
         self.output_projection = Conv1d(residual_channels, p_codec_rows, 1)
@@ -286,14 +286,14 @@ class ClassifierFreeDenoiser(CodecDiffusion):
 
         s_codec = s_codec.transpose(1, 2).float()
         s_codec = self.condition_normalize(s_codec)
-        c_codec = self.condition_normalize(c_codec)
+        # c_codec = self.condition_normalize(c_codec)
         if self.training: # only use dropout during training
             s_codec = self.uncon_dropout(s_codec, self.hparams.cond_dropout) # making some score 0 to be unconditional
-            c_codec = self.uncon_dropout(c_codec, self.hparams.cond_dropout) 
+            # c_codec = self.uncon_dropout(c_codec, self.hparams.cond_dropout) 
 
         # Generate FiLM conditions (beta and gamma) by FiLM generator (Linear layer)
-        c_codec_flat = torch.flatten(c_codec, start_dim = 1).float()
-        film_feat = self.film_layer(c_codec_flat)
+        # c_codec_flat = torch.flatten(c_codec, start_dim = 1).float()
+        # film_feat = self.film_layer(c_codec_flat)
 
         x = self.input_projection(x_t) # (B, 512, LEN)
         x = F.relu(x)
@@ -305,11 +305,11 @@ class ClassifierFreeDenoiser(CodecDiffusion):
         for layer in self.residual_layers:
             index += 1
 
-            gamma = film_feat[:, 2*(index-1)]
-            beta = film_feat[:, 2*index-1]
-
+            # gamma = film_feat[:, 2*(index-1)]
+            # beta = film_feat[:, 2*index-1]
+            
             # all shapes: (B, 512, LEN)
-            x, skip_connection = layer(x, diffusion_step, gamma, beta, s_codec)
+            x, skip_connection = layer(x, diffusion_step, s_codec)
             skip = skip_connection if skip is None else skip_connection + skip
 
         x = skip / sqrt(len(self.residual_layers)) 

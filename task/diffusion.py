@@ -240,9 +240,9 @@ class CodecDiffusion(pl.LightningModule):
         # calculations for posterior q(x_{t-1} | x_t, x_0)
         self.posterior_variance = self.betas * (1. - alphas_cumprod_prev) / (1- alphas_cumprod)
         self.inner_loop = tqdm(range(self.hparams.timesteps), desc='sampling loop time step')
-
+        
         self.reverse_diffusion = getattr(self, sampling['type'])
-        # self.reverse_diffusion = getattr(self, sampling.type) # bound method cfdg_ddpm_x0, from task config
+        # self.reverse_diffusion = getattr(self, sampling.type)
         self.alphas = alphas
 
     def training_step(self, batch, batch_idx):
@@ -379,7 +379,7 @@ class CodecDiffusion(pl.LightningModule):
         t = torch.randint(0, self.hparams.timesteps, (batch_size,), device=device).long().cpu() # more diverse sampling
         
         noise = torch.randn_like(p_codec) 
-        if self.hparams.training.target == "transfer": # invert each pair 
+        if self.hparams.training['target'] == "transfer": # invert each pair 
             noise = tensor_pair_swap(p_codec)
             # in transfer context, c_codec is the difference between the two that's being transfered. 
             c_codec = tensor_pair_swap(c_codec) - c_codec # (tgt - src)
@@ -392,7 +392,7 @@ class CodecDiffusion(pl.LightningModule):
             noise=noise)
         
         # train to predict the noise, loss is computed for the noise
-        if self.hparams.training.mode == 'epsilon':
+        if self.hparams.training['mode'] == 'epsilon':
             epsilon_pred, _ = self(x_t, s_codec, c_codec, t) # predict the noise N(0, 1)
             diffusion_loss = self.p_losses(noise, epsilon_pred, loss_type=self.hparams.loss_type)
             pred_p_codec = extract_x0(
@@ -403,12 +403,12 @@ class CodecDiffusion(pl.LightningModule):
                 sqrt_one_minus_alphas_cumprod=self.sqrt_one_minus_alphas_cumprod)
                         
         # train to predict p_codec
-        elif self.hparams.training.mode == 'x_0':
+        elif self.hparams.training['mode'] == 'x_0':
             pred_p_codec, _ = self(x_t, s_codec, c_codec, t) 
             # pred_p_codec = p_codec_scale(pred_p_codec, self.hparams.dataset_means, self.hparams.dataset_stds)
             diffusion_loss = self.p_losses(p_codec, pred_p_codec, loss_type=self.hparams.loss_type)
             
-        elif self.hparams.training.mode == 'ex_0':
+        elif self.hparams.training['mode'] == 'ex_0':
             epsilon_pred, _ = self(x_t, s_codec, c_codec, t) # predict the noise N(0, 1)
             pred_p_codec = extract_x0(
                 x_t,
@@ -606,7 +606,7 @@ class CodecDiffusion(pl.LightningModule):
         # Use our model (noise predictor) to predict the mean 
         epsilon_c, cond = self(x, s_codec, c_codec, t_tensor)
         epsilon_0, _ = self(x, torch.zeros_like(s_codec), torch.zeros_like(c_codec), t_tensor)
-        epsilon = self.hparams.sampling.w * epsilon_c + (1 - self.hparams.sampling.w) * epsilon_0
+        epsilon = self.hparams.sampling['w'] * epsilon_c + (1 - self.hparams.sampling['w']) * epsilon_0
         
         # Equation 11 in the paper
         model_mean = sqrt_recip_alphas_t * (
@@ -622,7 +622,7 @@ class CodecDiffusion(pl.LightningModule):
             variance = torch.sqrt(posterior_variance_t) * noise
 
             # From the diffusion-inspired training strategy paper, remove the deviation parameter since noise is deterministic
-            if self.hparams.training.target == "transfer": 
+            if self.hparams.training['target'] == "transfer": 
                 return model_mean, cond
             return (model_mean + variance), cond     
         
@@ -637,7 +637,7 @@ class CodecDiffusion(pl.LightningModule):
         if self.hparams.training.mode == "ex_0" or self.hparams.training.mode == "epsilon":
             epsilon_c, cond = self(x, condition, t_tensor)
             epsilon_0, _ = self(x, torch.zeros_like(condition), t_tensor)
-            epsilon = self.hparams.sampling.w * epsilon_c + (1 - self.hparams.sampling.w) * epsilon_0
+            epsilon = self.hparams.sampling['w'] * epsilon_c + (1 - self.hparams.sampling['w']) * epsilon_0
             x0_pred = extract_x0(x, 
                                  epsilon, 
                                  t_tensor, 
@@ -649,7 +649,7 @@ class CodecDiffusion(pl.LightningModule):
             x0_pred_0, _ = self(x, torch.zeros_like(condition), t_tensor, sampling=True) # if sampling = True, the input condition will be overwritten
             # wait... is this really weighting???
             # x0_pred =  (1 + self.hparams.sampling.w) * x0_pred_c - self.hparams.sampling.w * x0_pred_0
-            x0_pred =  self.hparams.sampling.w * x0_pred_c + (1 - self.hparams.sampling.w) * x0_pred_0
+            x0_pred =  self.hparams.sampling['w'] * x0_pred_c + (1 - self.hparams.sampling['w']) * x0_pred_0
 
         if t_index == 0:
             sigma = (1/self.sqrt_one_minus_alphas_cumprod[t_index]) * (

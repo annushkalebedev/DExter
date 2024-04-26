@@ -138,7 +138,7 @@ class Renderer():
 
 
         self.performed_part = pt.musicanalysis.decode_performance(score, self.pcodec_pred)
-        pt.save_performance_midi(self.performed_part, f"{self.save_root}/{self.piece_name}.mid")
+        pt.save_performance_midi(self.performed_part, f"{self.piece_name}.mid")
 
         return 
 

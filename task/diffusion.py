@@ -241,7 +241,7 @@ class CodecDiffusion(pl.LightningModule):
         self.posterior_variance = self.betas * (1. - alphas_cumprod_prev) / (1- alphas_cumprod)
         self.inner_loop = tqdm(range(self.hparams.timesteps), desc='sampling loop time step')
 
-        self.reverse_diffusion = getattr(sampling['type'])
+        self.reverse_diffusion = getattr(self, sampling['type'])
         # self.reverse_diffusion = getattr(self, sampling.type) # bound method cfdg_ddpm_x0, from task config
         self.alphas = alphas
 
